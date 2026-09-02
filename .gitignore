@@ -29,19 +29,14 @@ config/local.toml
 .mypy_cache/
 .vscode/
 
-# Internal Planning & Docs
+# Agent, LLM & Internal Planning Files
 Plan.md
-GEMINI.md
 AGENTS.md
 mcp_servers.json
 .kilocodingrules
 .kilo/
 .antigravity/
+.agents/
+.claude/
+.codex/
 docs/
-
-# Agents: Ignore all except teams-realtime-translator
-.agents/*
-!.agents/skills/
-.agents/skills/*
-!.agents/skills/teams-realtime-translator/
-
