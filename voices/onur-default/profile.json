@@ -1,0 +1,14 @@
+{
+  "id": "onur-default",
+  "display_name": "Onur - Default",
+  "backend": "xtts_v2",
+  "reference_audio_path": "reference.wav",
+  "reference_text": null,
+  "reference_language": "tr",
+  "target_language": "en",
+  "target_languages": ["en", "fr"],
+  "is_default": true,
+  "metadata": {
+    "description": "Default personal Turkish voice reference for English and French cloned synthesis"
+  }
+}

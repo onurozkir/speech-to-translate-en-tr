@@ -1,0 +1,46 @@
+"""Deterministic mock MT adapter for tests."""
+
+from __future__ import annotations
+
+from teams_translator.translation.base import MTAdapter
+
+
+class MockMTAdapter(MTAdapter):
+    """Mock translation adapter for tests."""
+
+    def __init__(self):
+        self.is_initialized = False
+        self.is_warmed = False
+
+    def initialize(
+        self,
+        tr_en_model_path: str = "",
+        en_tr_model_path: str = "",
+        tr_fr_model_path: str = "",
+        device: str = "cpu",
+        compute_type: str = "int8",
+    ):
+        self.is_initialized = True
+
+    def warmup(self):
+        self.is_warmed = True
+
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        is_partial: bool = False,
+    ) -> str:
+        if not text:
+            return ""
+        if source_lang.lower().startswith("tr"):
+            if target_lang.lower().startswith("fr"):
+                return f"[FR] {text}"
+            return f"[EN] {text}"
+        return f"[TR] {text}"
+
+    def shutdown(self):
+        self.is_initialized = False
+        self.is_warmed = False
+

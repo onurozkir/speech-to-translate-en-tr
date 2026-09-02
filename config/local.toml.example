@@ -1,0 +1,17 @@
+# Copy to local.toml and customize for your target PC devices and paths
+
+[audio]
+# Run 'python -m teams_translator.main devices' to find IDs
+mic_device_id = ""
+loopback_device_id = ""
+render_device_id = "CABLE Input"
+
+[asr]
+# Optional: point to external model path if already downloaded
+# model_path = "C:/models/whisper-large-v3-turbo"
+
+[tts]
+voice_profile_id = "onur-default"
+
+[persistence]
+enabled = false

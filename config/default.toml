@@ -1,0 +1,87 @@
+[server]
+host = "127.0.0.1"
+port = 8000
+open_browser = true
+
+[audio]
+sample_rate = 48000
+channels = 1
+frame_duration_ms = 20
+ring_buffer_duration_sec = 5.0
+mic_device_id = ""
+loopback_device_id = ""
+render_device_id = ""
+
+[streaming]
+vad_threshold = 0.5
+vad_end_threshold = 0.35
+vad_min_speech_duration_ms = 200
+vad_min_silence_duration_ms = 750
+vad_start_confirm_frames = 3
+vad_end_confirm_frames = 6
+vad_hangover_ms = 200
+vad_energy_start_dbfs = -40.0
+vad_energy_end_dbfs = -46.0
+# Conservative starting values; tune from mic/loopback diagnostic recordings.
+guard_min_utterance_ms = 280.0
+guard_min_voiced_ms = 220.0
+guard_min_voiced_ratio = 0.25
+max_audio_queue_age_ms = 800.0
+whisper_max_no_speech_prob = 0.80
+whisper_min_avg_logprob = -1.20
+whisper_max_compression_ratio = 2.40
+commit_min_words = 3
+commit_max_wait_ms = 3500
+stable_prefix_min_count = 2
+max_partial_queue_size = 2
+max_committed_queue_size = 8
+max_tts_queue_size = 8
+
+[asr]
+backend = "whisper_turbo"
+model_path = "models/asr/whisper-large-v3-turbo"
+device = "cuda"
+compute_type = "float16"
+beam_size = 1
+# HuggingFace Whisper performs full-window decoding; never run it every 20 ms frame.
+partial_interval_ms = 500
+# Secondary gate after VAD. Measured AB13X speech path falls below the old 0.012 gate.
+min_audio_rms = 0.003
+language_mic = "tr"
+language_loopback = "en"
+initial_prompt = "Toplantı, Türkçe, teknik, iş, günlük konuşma."
+share_weights = true
+
+[translation]
+backend = "ctranslate2"
+tr_en_model_path = "models/mt/opus-mt-tc-big-tr-en"
+en_tr_model_path = "models/mt/opus-mt-tc-big-en-tr"
+tr_fr_model_path = "models/mt/opus-mt-tr-fr"
+device = "cpu"
+compute_type = "int8"
+beam_size = 2
+
+[tts]
+backend = "xtts_v2"
+model_path = "models/tts/xtts-v2"
+device = "cuda"
+voice_profile_id = "onur-default"
+sample_rate = 24000
+temperature = 0.75
+speed = 1.0
+
+[voice]
+profiles_root = "voices"
+default_profile = "onur-default"
+
+[persistence]
+enabled = false
+database_path = "data/meetings.sqlite3"
+recordings_root = "recordings"
+batch_size = 20
+flush_interval_sec = 2.0
+
+[telemetry]
+window_size = 100
+sample_interval_sec = 1.0
+high_latency_threshold_ms = 2500.0

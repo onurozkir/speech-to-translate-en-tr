@@ -1,0 +1,42 @@
+# Python
+.venv/
+.venv-tts/
+__pycache__/
+*.pyc
+
+# Models / data (large binaries)
+models/
+voices/**/cache/
+voices/**/*.wav
+voices/**/*.pt
+data/
+recordings/
+
+# Benchmarks output
+benchmarks/*/results/
+*.wav
+!benchmarks/corpus/*.json
+
+# Env / secrets
+.env
+.env.*
+config/local.toml
+
+# Tooling & IDE
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vscode/
+
+# Agent, LLM & Internal Planning Files
+Plan.md
+GEMINI.md
+AGENTS.md
+mcp_servers.json
+.kilocodingrules
+.kilo/
+.antigravity/
+.agents/
+.claude/
+.codex/
+docs/
