@@ -109,8 +109,9 @@ document.addEventListener("DOMContentLoaded", () => {
       
       profileSelect.onchange = async () => {
         localStorage.setItem("teams_trans_profile", profileSelect.value);
-        if (currentMeetingStatus === "RUNNING") {
+        if (currentMeetingStatus.toLowerCase() === "running") {
           try {
+            console.log("Live switching voice profile to:", profileSelect.value);
             const res = await fetch("/api/meeting/switch_voice", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -119,6 +120,8 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) {
               const err = await res.json().catch(() => ({}));
               console.error("Failed to switch voice live:", err);
+            } else {
+              console.log("Voice switched successfully.");
             }
           } catch (err) {
             console.error("Network error switching voice:", err);
@@ -129,8 +132,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (targetLanguageSelect) {
         targetLanguageSelect.onchange = async () => {
           localStorage.setItem("teams_trans_target_lang", targetLanguageSelect.value);
-          if (currentMeetingStatus === "RUNNING") {
+          if (currentMeetingStatus.toLowerCase() === "running") {
             try {
+              console.log("Live switching target language to:", targetLanguageSelect.value);
               const res = await fetch("/api/meeting/switch_language", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -139,6 +143,8 @@ document.addEventListener("DOMContentLoaded", () => {
               if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 alert("Failed to switch language:\n" + (err.detail || res.statusText));
+              } else {
+                console.log("Target language switched successfully.");
               }
             } catch (err) {
               console.error("Network error switching language:", err);
@@ -268,11 +274,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function updateStatus(status, meetingId) {
-    currentMeetingStatus = status;
-    statusBadge.className = `status-badge status-${status.toLowerCase()}`;
-    statusBadge.textContent = status;
+    const norm = (status || "").toLowerCase();
+    currentMeetingStatus = norm;
+    statusBadge.className = `status-badge status-${norm}`;
+    statusBadge.textContent = (status || "").toUpperCase();
 
-    if (status === "RUNNING") {
+    if (norm === "running") {
       btnStart.style.display = "none";
       btnStop.style.display = "block";
       meetingIdLabel.textContent = `Meeting: ${meetingId || "Active"}`;
