@@ -175,3 +175,4 @@ python -m pytest tests/ -v
 - Code: [MIT License](LICENSE)
 - XTTS-v2 Weights: Coqui Public Model License (CPML - Non-commercial / Personal use)
 - Whisper & MarianMT: MIT / Apache 2.0 / CC-BY-4.0
+

@@ -1,0 +1,5 @@
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[projects.'C:\dev\speech-to-translate']
+trust_level = "trusted"
