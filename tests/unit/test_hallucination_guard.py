@@ -34,6 +34,11 @@ def test_short_turkish_subscribe_hallucination_is_rejected():
     assert not decision.accepted
     assert decision.reason == "known_hallucination_pattern"
 
+def test_short_dot_turkish_subscribe_hallucination_is_rejected():
+    decision = HallucinationGuard().evaluate("Altyazı M.K.", GOOD_EVIDENCE)
+    assert not decision.accepted
+    assert decision.reason == "known_hallucination_pattern"
+
 
 def test_whisper_metadata_can_reject_no_speech_and_repetition():
     guard = HallucinationGuard()
