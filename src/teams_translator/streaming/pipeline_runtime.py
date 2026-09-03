@@ -12,6 +12,11 @@ from teams_translator.streaming.hallucination_guard import (
 from teams_translator.streaming.vad import SileroVAD, VADResult
 
 
+_CARRIED_PARTIAL_TEXT = "carried_partial_text"
+_CARRIED_AUDIO_START_NS = "carried_audio_start_ns"
+_CARRIED_MODEL_INFO = "carried_model_info"
+
+
 def build_vad(config: StreamingConfig) -> SileroVAD:
     return SileroVAD(
         threshold=config.vad_threshold,
@@ -49,16 +54,55 @@ def speech_evidence(result: VADResult, max_queue_age_ms: float) -> SpeechEvidenc
     )
 
 
-def reset_asr_utterance(session: ASRSession | None) -> None:
+def reset_asr_utterance(
+    session: ASRSession | None,
+    *,
+    carried_partial_text: str = "",
+    carried_audio_start_ns: int | None = None,
+    carried_model_info: dict | None = None,
+) -> None:
     if session is None:
         return
     session.audio_buffer.clear()
     session.total_audio_samples = 0
-    session.last_partial_text = ""
-    session.current_revision = 0
+    session.last_partial_text = carried_partial_text.strip()
+    session.current_revision = 1 if session.last_partial_text else 0
     session.metadata.pop("last_model_info", None)
     session.metadata.pop("samples_since_decode", None)
     session.metadata.pop("decode_attempted", None)
+    session.metadata.pop(_CARRIED_PARTIAL_TEXT, None)
+    session.metadata.pop(_CARRIED_AUDIO_START_NS, None)
+    session.metadata.pop(_CARRIED_MODEL_INFO, None)
+    if session.last_partial_text:
+        session.metadata[_CARRIED_PARTIAL_TEXT] = session.last_partial_text
+        session.metadata[_CARRIED_AUDIO_START_NS] = carried_audio_start_ns
+        session.metadata[_CARRIED_MODEL_INFO] = dict(carried_model_info or {})
+
+
+def merge_carried_partial(session: ASRSession, text: str) -> str:
+    """Prepend text retained after a split commit without duplicating it."""
+    carried = str(session.metadata.get(_CARRIED_PARTIAL_TEXT, "")).strip()
+    current = text.strip()
+    if not carried:
+        return current
+    if not current:
+        return carried
+    carried_key = " ".join(carried.split()).casefold()
+    current_key = " ".join(current.split()).casefold()
+    if current_key == carried_key or current_key.startswith(f"{carried_key} "):
+        merged = current
+    else:
+        merged = f"{carried} {current}"
+    session.last_partial_text = merged
+    return merged
+
+
+def carried_partial_context(session: ASRSession) -> tuple[str, int | None, dict]:
+    return (
+        str(session.metadata.get(_CARRIED_PARTIAL_TEXT, "")).strip(),
+        session.metadata.get(_CARRIED_AUDIO_START_NS),
+        dict(session.metadata.get(_CARRIED_MODEL_INFO, {})),
+    )
 
 
 def next_pcm_chunk(iterator):

@@ -1,9 +1,11 @@
 from types import SimpleNamespace
+import logging
 
 import numpy as np
 import torch
 
 from teams_translator.asr.whisper_backend import WhisperASRAdapter
+from teams_translator.asr import whisper_backend
 from teams_translator.core.types import Direction
 
 
@@ -44,6 +46,45 @@ def test_huggingface_decode_uses_one_length_owner_and_current_language():
     assert adapter.model.received.forced_decoder_ids is None
     assert adapter.model.received.language == "tr"
     assert adapter.model.received.task == "transcribe"
+
+
+def test_initialize_resolves_unavailable_cuda_to_cpu(monkeypatch, tmp_path, caplog):
+    loaded = {}
+
+    class FakeProcessorLoader:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            return object()
+
+    class FakeModel:
+        def __init__(self):
+            self.generation_config = SimpleNamespace(max_length=448, forced_decoder_ids=[])
+            self.moved_to = None
+
+        def to(self, device):
+            self.moved_to = device
+            return self
+
+    class FakeModelLoader:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            loaded["dtype"] = kwargs["dtype"]
+            loaded["model"] = FakeModel()
+            return loaded["model"]
+
+    monkeypatch.setattr(whisper_backend, "AutoProcessor", FakeProcessorLoader)
+    monkeypatch.setattr(whisper_backend, "AutoModelForSpeechSeq2Seq", FakeModelLoader)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    adapter = WhisperASRAdapter()
+    with caplog.at_level(logging.WARNING):
+        adapter.initialize(str(tmp_path), device="cuda", compute_type="float16")
+
+    assert adapter.device == "cpu"
+    assert adapter.compute_type == "float32"
+    assert loaded["dtype"] == torch.float32
+    assert loaded["model"].moved_to == "cpu"
+    assert "CUDA is unavailable" in caplog.text
 
 
 def test_partial_decode_is_coalesced_even_when_first_attempt_returns_empty():

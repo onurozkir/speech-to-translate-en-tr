@@ -98,8 +98,10 @@ class WhisperASRAdapter(ASRAdapter):
 
     def initialize(self, model_path: str, device: str = "cuda", compute_type: str = "float16"):
         self.model_path = model_path
-        self.device = device
+        self.device = self._resolve_device(device)
         self.compute_type = compute_type
+        if self.device == "cpu" and compute_type == "float16":
+            self.compute_type = "float32"
 
         path = Path(model_path)
         if not path.exists() and not (path.is_dir() or path.is_file()):
@@ -113,11 +115,16 @@ class WhisperASRAdapter(ASRAdapter):
 
         if has_ct2_model and WhisperModel is not None:
             self.backend_type = "faster_whisper"
-            logger.info(f"Loading faster-whisper model from '{model_path}' on {device} ({compute_type})...")
+            logger.info(
+                "Loading faster-whisper model from '%s' on %s (%s)...",
+                model_path,
+                self.device,
+                self.compute_type,
+            )
             self.model = WhisperModel(
                 model_size_or_path=str(path.resolve()),
-                device=device,
-                compute_type=compute_type,
+                device=self.device,
+                compute_type=self.compute_type,
                 local_files_only=True,
             )
         else:
@@ -125,8 +132,13 @@ class WhisperASRAdapter(ASRAdapter):
             if AutoModelForSpeechSeq2Seq is None or torch is None:
                 raise RuntimeError("transformers and torch are required for HuggingFace Whisper model.")
 
-            logger.info(f"Loading HuggingFace Whisper model from '{model_path}' on {device} ({compute_type})...")
-            torch_dtype = torch.float16 if (compute_type == "float16" and device == "cuda") else torch.float32
+            logger.info(
+                "Loading HuggingFace Whisper model from '%s' on %s (%s)...",
+                model_path,
+                self.device,
+                self.compute_type,
+            )
+            torch_dtype = torch.float16 if (self.compute_type == "float16" and self.device == "cuda") else torch.float32
 
             self.processor = AutoProcessor.from_pretrained(
                 str(path.resolve()),
@@ -143,10 +155,20 @@ class WhisperASRAdapter(ASRAdapter):
             # on per-call copies so the nested call cannot restore max_length=448.
             self.model.generation_config.max_length = None
             self.model.generation_config.forced_decoder_ids = None
-            if device == "cuda" and torch.cuda.is_available():
-                self.model.to("cuda")
+            self.model.to(self.device)
 
         logger.info(f"Whisper model loaded successfully (backend: {self.backend_type}).")
+
+    @staticmethod
+    def _resolve_device(requested_device: str) -> str:
+        requested = requested_device.strip().lower()
+        if requested.startswith("cuda") and (torch is None or not torch.cuda.is_available()):
+            logger.warning(
+                "CUDA is unavailable; falling back to CPU for Whisper instead of using requested device '%s'.",
+                requested_device,
+            )
+            return "cpu"
+        return requested
 
     def warmup(self):
         if self.model is None:

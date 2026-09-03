@@ -6,7 +6,7 @@ import asyncio
 import collections
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Callable, Optional
 
 import numpy as np
@@ -23,6 +23,8 @@ from teams_translator.streaming.commit_policy import CommitController
 from teams_translator.streaming.pipeline_runtime import (
     build_guard,
     build_vad,
+    carried_partial_context,
+    merge_carried_partial,
     next_pcm_chunk,
     reset_asr_utterance,
     speech_evidence,
@@ -179,19 +181,33 @@ class OutgoingPipeline:
         if vad_result.active:
             event = self.asr_adapter.process_audio(self.asr_session, frame_16k, captured_at_ns)
             if event is not None and event.text.strip():
+                event.text = merge_carried_partial(self.asr_session, event.text)
                 evidence = speech_evidence(vad_result, self._current_max_queue_age_ms)
                 decision = self.guard.evaluate(event.text, evidence, event.model_info)
                 if decision.accepted:
+                    commit = self.commit_controller.evaluate(event.text, now_ms=time.monotonic() * 1000.0)
+                    if commit.should_commit and self._handle_commit(
+                        commit.committed_text,
+                        event.audio_start_ns,
+                        captured_at_ns,
+                        event.model_info,
+                        remaining_partial_text=commit.remaining_partial_text,
+                    ):
+                        if commit.remaining_partial_text:
+                            event = replace(
+                                event,
+                                utterance_id=f"{self.asr_session.stream_id}_{self._sequence_counter}",
+                                sequence_id=self._sequence_counter,
+                                revision=1,
+                                text=commit.remaining_partial_text,
+                            )
+                        else:
+                            return
                     self._emit_event({
                         "type": "asr_partial", "direction": "outgoing", "text": event.text,
                         "sequence_id": event.sequence_id, "revision": event.revision,
                         "timestamp_ns": captured_at_ns,
                     })
-                    commit = self.commit_controller.evaluate(event.text, now_ms=time.monotonic() * 1000.0)
-                    # Without word timestamps, committing a prefix while discarding
-                    # its remainder loses speech. Defer split hypotheses to endpoint.
-                    if commit.should_commit and not commit.remaining_partial_text:
-                        self._handle_commit(commit.committed_text, event.audio_start_ns, captured_at_ns, event.model_info)
                 elif decision.reason in {
                     "known_hallucination_pattern", "repetitive_text", "whisper_no_speech",
                     "whisper_low_logprob", "whisper_repetition", "stale_audio",
@@ -201,13 +217,22 @@ class OutgoingPipeline:
 
         if vad_result.transition == "ended" and self._in_speech:
             self._in_speech = False
+            carried_text, carried_start_ns, carried_model_info = carried_partial_context(self.asr_session)
             final_event = self.asr_adapter.flush_session(self.asr_session)
             if final_event is not None and final_event.text.strip():
+                final_event.text = merge_carried_partial(self.asr_session, final_event.text)
                 self._handle_commit(
                     final_event.text,
-                    final_event.audio_start_ns,
+                    carried_start_ns or final_event.audio_start_ns,
                     captured_at_ns,
                     final_event.model_info,
+                )
+            elif carried_text:
+                self._handle_commit(
+                    carried_text,
+                    carried_start_ns or captured_at_ns,
+                    captured_at_ns,
+                    carried_model_info,
                 )
             else:
                 self._reject_current("no_asr_text", "")
@@ -219,7 +244,15 @@ class OutgoingPipeline:
 
         self._preroll.append(frame_16k)
 
-    def _handle_commit(self, text: str, audio_start_ns: int, audio_end_ns: int, model_info: dict) -> bool:
+    def _handle_commit(
+        self,
+        text: str,
+        audio_start_ns: int,
+        audio_end_ns: int,
+        model_info: dict,
+        *,
+        remaining_partial_text: str = "",
+    ) -> bool:
         evidence = speech_evidence(self._last_vad_result, self._current_max_queue_age_ms)
         decision = self.guard.evaluate(text, evidence, model_info)
         if not decision.accepted:
@@ -238,7 +271,12 @@ class OutgoingPipeline:
         )
         self._sequence_counter += 1
         self.asr_session.sequence_id = self._sequence_counter
-        reset_asr_utterance(self.asr_session)
+        reset_asr_utterance(
+            self.asr_session,
+            carried_partial_text=remaining_partial_text,
+            carried_audio_start_ns=audio_start_ns,
+            carried_model_info=model_info,
+        )
         self.commit_controller.reset()
         self._submit_queue(self.committed_queue, event, "outgoing_committed")
         self._emit_event({
