@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 import logging
+import threading
+import time
 
 import numpy as np
 import torch
@@ -7,6 +9,120 @@ import torch
 from teams_translator.asr.whisper_backend import WhisperASRAdapter
 from teams_translator.asr import whisper_backend
 from teams_translator.core.types import Direction
+
+
+def _run_scheduled_order(requests):
+    adapter = WhisperASRAdapter()
+    scheduler = adapter._inference_scheduler
+    order = []
+    threads = []
+
+    def run(direction, audio_end_ns):
+        with scheduler.acquire(
+            direction=direction,
+            is_final=False,
+            audio_end_ns=audio_end_ns,
+        ):
+            order.append(direction)
+
+    now_ns = time.monotonic_ns()
+    with scheduler.acquire(direction=None, is_final=True, audio_end_ns=now_ns):
+        for direction, audio_end_ns in requests:
+            thread = threading.Thread(target=run, args=(direction, audio_end_ns))
+            thread.start()
+            threads.append(thread)
+        deadline = time.monotonic() + 1.0
+        while scheduler.pending_count < len(requests) and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert scheduler.pending_count == len(requests)
+
+    for thread in threads:
+        thread.join(timeout=1.0)
+        assert not thread.is_alive()
+    return order
+
+
+def test_shared_scheduler_prefers_outgoing_for_equal_audio_deadlines():
+    deadline_ns = time.monotonic_ns()
+    order = _run_scheduled_order([
+        (Direction.INCOMING, deadline_ns),
+        (Direction.OUTGOING, deadline_ns),
+    ])
+
+    assert order == [Direction.OUTGOING, Direction.INCOMING]
+
+
+def test_shared_scheduler_admission_grace_allows_outgoing_to_precede_new_incoming_partial():
+    scheduler = whisper_backend._SharedInferenceScheduler(admission_grace_ms=100.0)
+    order = []
+
+    def run(direction):
+        with scheduler.acquire(
+            direction=direction,
+            is_final=False,
+            audio_end_ns=time.monotonic_ns(),
+        ):
+            order.append(direction)
+
+    incoming = threading.Thread(target=run, args=(Direction.INCOMING,))
+    incoming.start()
+    deadline = time.monotonic() + 1.0
+    while scheduler.pending_count < 1 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert scheduler.pending_count == 1
+
+    outgoing = threading.Thread(target=run, args=(Direction.OUTGOING,))
+    outgoing.start()
+    incoming.join(timeout=1.0)
+    outgoing.join(timeout=1.0)
+
+    assert not incoming.is_alive()
+    assert not outgoing.is_alive()
+    assert order == [Direction.OUTGOING, Direction.INCOMING]
+
+
+def test_shared_scheduler_prioritizes_older_audio_before_direction():
+    now_ns = time.monotonic_ns()
+    order = _run_scheduled_order([
+        (Direction.OUTGOING, now_ns),
+        (Direction.INCOMING, now_ns - 2_000_000_000),
+    ])
+
+    assert order == [Direction.INCOMING, Direction.OUTGOING]
+
+
+def test_adapter_reports_inference_wait_for_each_session():
+    samples = []
+    adapter = WhisperASRAdapter(
+        min_audio_rms=0.0,
+        on_inference_wait=lambda session, sample: samples.append((session, sample)),
+    )
+    adapter.model = object()
+    adapter._decode_audio = lambda audio, language, **kwargs: (
+        "Merhaba",
+        {
+            "asr_inference_wait_ms": 12.5,
+            "asr_inference_queue_depth": 2,
+            "asr_inference_deadline_miss_ms": 3.0,
+        },
+    )
+    session = adapter.create_session("tx", Direction.OUTGOING, "tr")
+
+    event = adapter.process_audio(
+        session,
+        np.ones(4800, dtype=np.float32),
+        time.monotonic_ns(),
+    )
+
+    assert event is not None
+    assert len(samples) == 1
+    assert samples[0][0] is session
+    assert samples[0][1] == {
+        "wait_ms": 12.5,
+        "queue_depth": 2,
+        "deadline_miss_ms": 3.0,
+        "is_final": False,
+    }
 
 
 def test_huggingface_decode_uses_one_length_owner_and_current_language():

@@ -18,3 +18,26 @@ def test_telemetry_percentiles():
     assert p["p50"] == 300.0
     assert p["p95"] == 480.0
 
+
+def test_asr_inference_wait_is_split_by_direction():
+    tracker = TelemetryTracker(window_size=100)
+    tracker.record_event(LatencyEvent(
+        meeting_id="m1",
+        utterance_id="tx_1",
+        direction=Direction.OUTGOING,
+        event_type="asr_inference_wait",
+        duration_ms=10.0,
+    ))
+    tracker.record_event(LatencyEvent(
+        meeting_id="m1",
+        utterance_id="rx_1",
+        direction=Direction.INCOMING,
+        event_type="asr_inference_wait",
+        duration_ms=20.0,
+    ))
+
+    snapshot = tracker.get_snapshot()
+    assert snapshot["asr_wait_outgoing"]["count"] == 1
+    assert snapshot["asr_wait_outgoing"]["p50"] == 10.0
+    assert snapshot["asr_wait_incoming"]["count"] == 1
+    assert snapshot["asr_wait_incoming"]["p50"] == 20.0

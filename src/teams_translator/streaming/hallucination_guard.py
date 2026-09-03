@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 DEFAULT_PATTERNS = (
     "izlediğiniz için teşekkürler", "izlediğiniz için teşekkür ederim",
     "abone olmayı unutmayın", "beğenmeyi unutmayın", "görüşmek üzere",
-    "abone ol", "thank you for watching", "thanks for watching", "please subscribe", "altyazı m.k."
+    "abone ol", "thank you for watching", "thanks for watching", "please subscribe", "altyazı m.k.",
     "see you next time", "[music]", "[müzik]", "[applause]", "[alkış]",
     "(laughter)", "(gülüşmeler)", "subtitle", "altyazı",
 )

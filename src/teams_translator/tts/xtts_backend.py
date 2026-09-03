@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
 import numpy as np
@@ -27,25 +29,43 @@ try:
 
     from TTS.tts.configs.xtts_config import XttsConfig
     from TTS.tts.models.xtts import Xtts
+    import TTS.tts.models.xtts as xtts_model_module
     import torchaudio
     import soundfile as sf
 
-    def _soundfile_load(filepath, *args, **kwargs):
-        data, sr = sf.read(filepath, dtype="float32")
-        t = torch.from_numpy(data)
-        if t.ndim == 1:
-            t = t.unsqueeze(0)
+    def _soundfile_load(filepath, sampling_rate):
+        """Load XTTS conditioning audio without replacing torchaudio.load globally."""
+        data, source_rate = sf.read(filepath, dtype="float32")
+        audio = torch.from_numpy(data)
+        if audio.ndim == 1:
+            audio = audio.unsqueeze(0)
         else:
-            t = t.T
-        return t, sr
+            audio = audio.T
+        if audio.size(0) != 1:
+            audio = torch.mean(audio, dim=0, keepdim=True)
+        if source_rate != sampling_rate:
+            audio = torchaudio.functional.resample(audio, source_rate, sampling_rate)
+        return audio.clamp_(-1, 1)
 
-    torchaudio.load = _soundfile_load
+    _xtts_loader_lock = threading.RLock()
+
+    @contextmanager
+    def _scoped_xtts_audio_loader():
+        """Apply the Coqui loader workaround only while preparing conditioning."""
+        with _xtts_loader_lock:
+            original_loader = xtts_model_module.load_audio
+            xtts_model_module.load_audio = _soundfile_load
+            try:
+                yield
+            finally:
+                xtts_model_module.load_audio = original_loader
 except Exception as _tts_err:
     _tts_import_error = _tts_err
     if "torch" not in globals():
         torch = None  # type: ignore
     XttsConfig = None  # type: ignore
     Xtts = None  # type: ignore
+    xtts_model_module = None  # type: ignore
 
 
 class XTTSv2Adapter(TTSAdapter):
@@ -157,12 +177,13 @@ class XTTSv2Adapter(TTSAdapter):
                 logger.warning(f"Could not load cache file: {e}")
 
         logger.info(f"Computing speaker conditioning latents for profile '{profile.display_name}' from {ref_path}...")
-        gpt_cond_latent, speaker_embedding = self.model.get_conditioning_latents(
-            audio_path=[str(ref_path.resolve())],
-            gpt_cond_len=30,
-            max_ref_length=60,
-            sound_norm_refs=False,
-        )
+        with _scoped_xtts_audio_loader():
+            gpt_cond_latent, speaker_embedding = self.model.get_conditioning_latents(
+                audio_path=[str(ref_path.resolve())],
+                gpt_cond_len=30,
+                max_ref_length=60,
+                sound_norm_refs=False,
+            )
 
         latents = (gpt_cond_latent, speaker_embedding)
         self._latents_cache[cache_key] = latents

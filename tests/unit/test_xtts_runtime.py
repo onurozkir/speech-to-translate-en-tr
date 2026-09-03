@@ -54,3 +54,34 @@ def test_xtts_missing_reference_fails_instead_of_using_zero_latents(tmp_path):
 
     with pytest.raises(RuntimeError, match="Voice reference audio.*not found"):
         list(adapter.synthesize_committed("Hello", profile, "en"))
+
+
+def test_xtts_soundfile_workaround_is_scoped_to_conditioning_call(tmp_path):
+    reference = tmp_path / "reference.wav"
+    reference.write_bytes(b"voice")
+    profile = VoiceProfile(
+        "onur",
+        "Onur",
+        "xtts_v2",
+        str(reference),
+        conditioning_cache_path=str(tmp_path / "cache"),
+    )
+    original_torchaudio_load = xtts_backend.torchaudio.load
+    original_xtts_load_audio = xtts_backend.xtts_model_module.load_audio
+    observed = {}
+
+    class FakeModel:
+        def get_conditioning_latents(self, **kwargs):
+            observed["torchaudio_load"] = xtts_backend.torchaudio.load
+            observed["xtts_load_audio"] = xtts_backend.xtts_model_module.load_audio
+            return SimpleNamespace(), SimpleNamespace()
+
+    adapter = xtts_backend.XTTSv2Adapter()
+    adapter.model = FakeModel()
+    adapter.prepare_voice_profile(profile)
+
+    assert original_torchaudio_load is not xtts_backend._soundfile_load
+    assert observed["torchaudio_load"] is original_torchaudio_load
+    assert observed["xtts_load_audio"] is xtts_backend._soundfile_load
+    assert xtts_backend.torchaudio.load is original_torchaudio_load
+    assert xtts_backend.xtts_model_module.load_audio is original_xtts_load_audio

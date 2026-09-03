@@ -86,8 +86,9 @@ def test_orchestrator_wires_runtime_config_into_adapters(monkeypatch, tmp_path):
     asyncio.run(instance.initialize_and_warmup())
 
     assert instance.status == MeetingStatus.READY
-    assert received == {
-        "asr": {"partial_interval_ms": 500, "min_audio_rms": 0.003, "beam_size": 3},
-        "mt": {"beam_size": 4},
-        "tts": {"temperature": 0.6, "speed": 1.1},
-    }
+    assert received["asr"]["partial_interval_ms"] == 500
+    assert received["asr"]["min_audio_rms"] == 0.003
+    assert received["asr"]["beam_size"] == 3
+    assert callable(received["asr"]["on_inference_wait"])
+    assert received["mt"] == {"beam_size": 4}
+    assert received["tts"] == {"temperature": 0.6, "speed": 1.1}
