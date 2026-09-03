@@ -138,6 +138,7 @@ class MeetingOrchestrator:
                 tr_en_model_path=self.config.translation.tr_en_model_path,
                 en_tr_model_path=self.config.translation.en_tr_model_path,
                 tr_fr_model_path=getattr(self.config.translation, "tr_fr_model_path", None),
+                nllb_model_path=getattr(self.config.translation, "nllb_model_path", None) if getattr(self.config.translation, "model_type", "auto") == "nllb" else None,
                 device=self.config.translation.device,
                 compute_type=self.config.translation.compute_type,
             )

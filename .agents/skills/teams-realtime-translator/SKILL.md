@@ -76,6 +76,10 @@ Apply this workflow whenever the skill matches:
     scheduler rather than a bare lock. Reserve bounded priority for outgoing
     delivery, prevent starvation by queue age, and record wait/deadline-miss
     telemetry per session and direction.
+36. MT execution must use CTranslate2 INT8 rather than unquantized HuggingFace float32.
+    Always ensure `</s>` EOS token is present before CTranslate2 batch translation,
+    decode with `skip_special_tokens=True`, and apply domain glossary replacements
+    with word-boundary awareness.
 
 Before editing, inspect the current implementation and dirty worktree. During
 review, reject growing backlog, committed reordering/loss, false Ready states,

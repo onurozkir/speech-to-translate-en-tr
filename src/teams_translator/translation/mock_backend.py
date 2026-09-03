@@ -17,8 +17,10 @@ class MockMTAdapter(MTAdapter):
         tr_en_model_path: str = "",
         en_tr_model_path: str = "",
         tr_fr_model_path: str = "",
+        nllb_model_path: Optional[str] = None,
         device: str = "cpu",
         compute_type: str = "int8",
+        **kwargs,
     ):
         self.is_initialized = True
 
@@ -31,9 +33,14 @@ class MockMTAdapter(MTAdapter):
         source_lang: str,
         target_lang: str,
         is_partial: bool = False,
+        context: Optional[str] = None,
+        glossary: Optional[dict[str, str]] = None,
     ) -> str:
         if not text:
             return ""
+        if glossary:
+            for k, v in glossary.items():
+                text = text.replace(k, v)
         if source_lang.lower().startswith("tr"):
             if target_lang.lower().startswith("fr"):
                 return f"[FR] {text}"

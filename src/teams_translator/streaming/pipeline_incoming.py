@@ -76,6 +76,7 @@ class IncomingPipeline:
         self._tasks: list[asyncio.Task] = []
         self._sequence_counter = 0
         self._in_speech = False
+        self._context_history: collections.deque[str] = collections.deque(maxlen=2)
         self._preroll = collections.deque(maxlen=max(1, 200 // config.audio.frame_duration_ms))
         self._last_vad_result = VADResult(False, 0.0, "idle", None, 0.0, 0.0, -120.0, 0.0, 0.0, 0.0, "unknown")
         self._current_max_queue_age_ms = 0.0
@@ -301,7 +302,20 @@ class IncomingPipeline:
     async def _committed_mt_worker(self) -> None:
         while self.is_running:
             event = await self.committed_queue.get()
-            translated = await asyncio.to_thread(self.mt_adapter.translate_event, event, "tr")
+            prev_context = (
+                self._context_history[-1]
+                if (getattr(self.config.translation, "enable_context_priming", True) and self._context_history)
+                else None
+            )
+            glossary = getattr(self.config.translation, "glossary", None)
+            translated = await asyncio.to_thread(
+                self.mt_adapter.translate_event,
+                event,
+                "tr",
+                context=prev_context,
+                glossary=glossary,
+            )
+            self._context_history.append(event.text)
             now_ns = time.monotonic_ns()
             self._record_latency(event, "incoming_committed", now_ns, (now_ns - event.audio_end_ns) / 1e6)
             self._emit_event({
