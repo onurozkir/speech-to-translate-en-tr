@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -97,7 +98,7 @@ class CommitController:
             common_prefix = self._longest_common_word_prefix(self.last_hypotheses[-2], self.last_hypotheses[-1])
             prefix_words = common_prefix.split()
             if len(prefix_words) >= self.min_words:
-                if common_prefix == self.stable_prefix_candidate:
+                if self._comparison_key(common_prefix) == self._comparison_key(self.stable_prefix_candidate):
                     self.stable_prefix_matches += 1
                 else:
                     self.stable_prefix_candidate = common_prefix
@@ -118,17 +119,21 @@ class CommitController:
                                 remaining_partial_text=remainder,
                                 reason="stable_prefix_clause",
                             )
+            else:
+                self.stable_prefix_candidate = ""
+                self.stable_prefix_matches = 0
 
         # 4. Max wait deadline timeout
         if elapsed_wait_ms >= self.max_wait_ms and len(words) >= self.min_words:
-            # Look for last reasonable clause or commit up to half/current text
-            self.reset()
-            return CommitDecision(
-                should_commit=True,
-                committed_text=current_text,
-                remaining_partial_text="",
-                reason="deadline_timeout",
-            )
+            committed, remainder = self._deadline_safe_split(current_text)
+            if committed:
+                self.reset()
+                return CommitDecision(
+                    should_commit=True,
+                    committed_text=committed,
+                    remaining_partial_text=remainder,
+                    reason="deadline_timeout",
+                )
 
         return CommitDecision(
             should_commit=False,
@@ -142,9 +147,33 @@ class CommitController:
         w2 = s2.split()
         common = []
         for a, b in zip(w1, w2):
-            if a.lower() == b.lower():
+            if self._comparison_key(a) == self._comparison_key(b):
                 common.append(a)
             else:
                 break
         return " ".join(common)
 
+    @staticmethod
+    def _comparison_key(text: str) -> str:
+        normalized = unicodedata.normalize("NFKC", " ".join(text.split())).casefold()
+        return normalized.replace("i\u0307", "i")
+
+    def _deadline_safe_split(self, current_text: str) -> Tuple[str, str]:
+        """Return only text supported by stable revisions or a clause boundary."""
+        stable_words = self.stable_prefix_candidate.split()
+        current_words = current_text.split()
+        if (
+            len(stable_words) >= self.min_words
+            and len(current_words) >= len(stable_words)
+            and all(self._comparison_key(a) == self._comparison_key(b) for a, b in zip(stable_words, current_words))
+        ):
+            split_at = len(stable_words)
+            return " ".join(current_words[:split_at]), " ".join(current_words[split_at:])
+
+        boundaries = [match.end() for match in self._punct_regex.finditer(current_text)]
+        boundaries.extend(match.start() for match in self._conjunction_regex.finditer(current_text))
+        for split_idx in sorted(boundaries, reverse=True):
+            committed = current_text[:split_idx].strip()
+            if len(committed.split()) >= self.min_words:
+                return committed, current_text[split_idx:].strip()
+        return "", current_text
