@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
       
       profileSelect.onchange = async () => {
         localStorage.setItem("teams_trans_profile", profileSelect.value);
+        if (currentMeetingStatus === "RUNNING") {
         if (currentMeetingStatus.toLowerCase() === "running") {
           try {
             console.log("Live switching voice profile to:", profileSelect.value);
@@ -132,6 +133,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (targetLanguageSelect) {
         targetLanguageSelect.onchange = async () => {
           localStorage.setItem("teams_trans_target_lang", targetLanguageSelect.value);
+          if (currentMeetingStatus === "RUNNING") {
           if (currentMeetingStatus.toLowerCase() === "running") {
             try {
               console.log("Live switching target language to:", targetLanguageSelect.value);
@@ -274,11 +276,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function updateStatus(status, meetingId) {
+    currentMeetingStatus = status;
+    statusBadge.className = `status-badge status-${status.toLowerCase()}`;
+    statusBadge.textContent = status;
     const norm = (status || "").toLowerCase();
     currentMeetingStatus = norm;
     statusBadge.className = `status-badge status-${norm}`;
     statusBadge.textContent = (status || "").toUpperCase();
 
+    if (status === "RUNNING") {
     if (norm === "running") {
       btnStart.style.display = "none";
       btnStop.style.display = "block";

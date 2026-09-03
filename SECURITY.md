@@ -31,3 +31,4 @@ If you discover a security vulnerability in this project, please **do not open a
 4. We will coordinate a fix and release a security advisory once patched.
 
 Thank you for helping keep this project secure and private for everyone!
+
