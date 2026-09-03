@@ -20,6 +20,8 @@ class TelemetryTracker:
             "outgoing_pcm": deque(maxlen=window_size),
             "mt_duration": deque(maxlen=window_size),
             "tts_first_pcm": deque(maxlen=window_size),
+            "asr_wait_outgoing": deque(maxlen=window_size),
+            "asr_wait_incoming": deque(maxlen=window_size),
         }
         self.total_events = 0
         self.underruns = 0
@@ -31,7 +33,10 @@ class TelemetryTracker:
         if dur is None or dur < 0:
             return
 
-        if "incoming_partial" in event.event_type:
+        if event.event_type == "asr_inference_wait":
+            metric = "asr_wait_outgoing" if event.direction.value == "outgoing" else "asr_wait_incoming"
+            self._samples[metric].append(dur)
+        elif "incoming_partial" in event.event_type:
             self._samples["incoming_partial"].append(dur)
         elif "incoming_committed" in event.event_type:
             self._samples["incoming_committed"].append(dur)
@@ -61,10 +66,11 @@ class TelemetryTracker:
             "outgoing_pcm": self.get_percentiles("outgoing_pcm"),
             "mt_duration": self.get_percentiles("mt_duration"),
             "tts_first_pcm": self.get_percentiles("tts_first_pcm"),
+            "asr_wait_outgoing": self.get_percentiles("asr_wait_outgoing"),
+            "asr_wait_incoming": self.get_percentiles("asr_wait_incoming"),
             "counters": {
                 "total_events": self.total_events,
                 "underruns": self.underruns,
                 "overruns": self.overruns,
             },
         }
-

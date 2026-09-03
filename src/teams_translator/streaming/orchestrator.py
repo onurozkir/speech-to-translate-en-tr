@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Callable, Dict, List, Optional
 
-from teams_translator.asr.base import ASRAdapter
+from teams_translator.asr.base import ASRAdapter, ASRSession
 from teams_translator.asr.mock_backend import MockASRAdapter
 from teams_translator.asr.whisper_backend import WhisperASRAdapter
 from teams_translator.audio.devices import AudioDeviceManager, DeviceInfo
@@ -58,6 +59,7 @@ class MeetingOrchestrator:
             "vb_cable_capture": None,
         }
         self.last_start_error: Optional[str] = None
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
 
     def subscribe_events(self, callback: Callable[[dict], None]):
         self.event_subscribers.append(callback)
@@ -77,8 +79,30 @@ class MeetingOrchestrator:
             "metrics": self.telemetry.get_snapshot(),
         })
 
+    def _on_asr_inference_wait(self, session: ASRSession, sample: dict) -> None:
+        meeting_id = str(session.metadata.get("meeting_id") or self.current_meeting_id or "local_session")
+        event = LatencyEvent(
+            meeting_id=meeting_id,
+            utterance_id=f"{session.stream_id}_{session.sequence_id}",
+            direction=session.direction,
+            event_type="asr_inference_wait",
+            monotonic_ns=time.monotonic_ns(),
+            duration_ms=float(sample["wait_ms"]),
+            metadata={
+                "stream_id": session.stream_id,
+                "queue_depth": int(sample["queue_depth"]),
+                "deadline_miss_ms": float(sample["deadline_miss_ms"]),
+                "is_final": bool(sample["is_final"]),
+            },
+        )
+        if self._event_loop is not None and self._event_loop.is_running():
+            self._event_loop.call_soon_threadsafe(self._on_latency_event, event)
+        else:
+            self._on_latency_event(event)
+
     async def initialize_and_warmup(self):
         """Initializes and warms all models before marking READY."""
+        self._event_loop = asyncio.get_running_loop()
         self.last_start_error = None
         self.status = MeetingStatus.STARTING
         self._broadcast_status()
@@ -94,6 +118,7 @@ class MeetingOrchestrator:
                     partial_interval_ms=self.config.asr.partial_interval_ms,
                     min_audio_rms=self.config.asr.min_audio_rms,
                     beam_size=self.config.asr.beam_size,
+                    on_inference_wait=self._on_asr_inference_wait,
                 )
                 self.mt_adapter = CTranslate2MTAdapter(
                     beam_size=self.config.translation.beam_size,
@@ -356,5 +381,6 @@ class MeetingOrchestrator:
         if self.tts_adapter:
             self.tts_adapter.shutdown()
         self.device_manager.close()
+        self._event_loop = None
         self.status = MeetingStatus.STOPPED
         logger.info("MeetingOrchestrator shut down completely.")

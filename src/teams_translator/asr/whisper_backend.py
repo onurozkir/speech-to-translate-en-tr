@@ -10,8 +10,9 @@ import threading
 import time
 import zlib
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import numpy as np
 
 from teams_translator.asr.base import ASRAdapter, ASRSession
@@ -38,6 +39,122 @@ def _quiet_transformers_whisper_internal_warning():
         yield
     finally:
         generation_logger.removeFilter(message_filter)
+
+
+@dataclass(slots=True)
+class _InferenceRequest:
+    ticket: int
+    direction: Optional[Direction]
+    is_final: bool
+    deadline_ns: int
+    enqueued_ns: int
+    not_before_ns: int
+    queue_depth: int = 0
+
+
+class _SharedInferenceScheduler:
+    """Bounded scheduler for two sessions sharing one non-reentrant model."""
+
+    def __init__(
+        self,
+        *,
+        max_pending: int = 4,
+        deadline_slack_ms: float = 500.0,
+        admission_grace_ms: float = 2.0,
+    ):
+        self._max_pending = max(1, int(max_pending))
+        self._deadline_slack_ns = max(0, int(deadline_slack_ms * 1e6))
+        self._admission_grace_ns = max(0, int(admission_grace_ms * 1e6))
+        self._condition = threading.Condition()
+        self._pending: list[_InferenceRequest] = []
+        self._active = False
+        self._next_ticket = 0
+
+    @property
+    def pending_count(self) -> int:
+        with self._condition:
+            return len(self._pending)
+
+    @staticmethod
+    def _direction_priority(request: _InferenceRequest) -> int:
+        if request.direction == Direction.OUTGOING:
+            return 0
+        if request.direction == Direction.INCOMING and request.is_final:
+            return 1
+        if request.direction == Direction.INCOMING:
+            return 2
+        return 3
+
+    @classmethod
+    def _sort_key(cls, request: _InferenceRequest) -> tuple[int, int, int]:
+        # Oldest audio deadline wins. Direction only breaks equal-deadline ties,
+        # so continuous outgoing work cannot starve older incoming audio.
+        return request.deadline_ns, cls._direction_priority(request), request.ticket
+
+    @contextmanager
+    def acquire(
+        self,
+        *,
+        direction: Optional[Direction],
+        is_final: bool,
+        audio_end_ns: Optional[int],
+    ):
+        enqueued_ns = time.monotonic_ns()
+        with self._condition:
+            if len(self._pending) >= self._max_pending:
+                raise RuntimeError(
+                    f"ASR inference scheduler capacity exceeded ({self._max_pending} pending requests)."
+                )
+            request = _InferenceRequest(
+                ticket=self._next_ticket,
+                direction=direction,
+                is_final=is_final,
+                deadline_ns=int(audio_end_ns or enqueued_ns),
+                enqueued_ns=enqueued_ns,
+                not_before_ns=enqueued_ns,
+            )
+            # Reserve more downstream time for outgoing ASR. Older incoming audio
+            # still wins once its queue age exceeds the bounded priority reserve.
+            request.deadline_ns += self._deadline_slack_ns * (
+                self._direction_priority(request) + 1
+            )
+            if (
+                request.direction == Direction.INCOMING
+                and not request.is_final
+                and request.deadline_ns > enqueued_ns
+            ):
+                request.not_before_ns += self._admission_grace_ns
+            self._next_ticket += 1
+            self._pending.append(request)
+            request.queue_depth = len(self._pending) + int(self._active)
+            self._condition.notify_all()
+            while True:
+                selected = min(self._pending, key=self._sort_key)
+                now_ns = time.monotonic_ns()
+                if not self._active and selected is request:
+                    remaining_ns = request.not_before_ns - now_ns
+                    if remaining_ns <= 0:
+                        break
+                    self._condition.wait(timeout=remaining_ns / 1e9)
+                else:
+                    self._condition.wait()
+            self._pending.remove(request)
+            self._active = True
+            started_ns = time.monotonic_ns()
+
+        try:
+            yield {
+                "asr_inference_wait_ms": (started_ns - request.enqueued_ns) / 1e6,
+                "asr_inference_queue_depth": request.queue_depth,
+                "asr_inference_deadline_miss_ms": max(
+                    0.0,
+                    (started_ns - request.deadline_ns) / 1e6,
+                ),
+            }
+        finally:
+            with self._condition:
+                self._active = False
+                self._condition.notify_all()
 
 
 def strip_prompt_prefix(text: str, prompt: str) -> str:
@@ -88,6 +205,7 @@ class WhisperASRAdapter(ASRAdapter):
         partial_interval_ms: int = 500,
         min_audio_rms: float = 0.003,
         beam_size: int = 1,
+        on_inference_wait: Optional[Callable[[ASRSession, dict[str, Any]], None]] = None,
     ):
         self.model: Optional[Any] = None
         self.processor: Optional[Any] = None
@@ -99,8 +217,11 @@ class WhisperASRAdapter(ASRAdapter):
         self.partial_interval_samples = max(1600, int(16000 * partial_interval_ms / 1000.0))
         self.min_audio_rms = max(0.0, float(min_audio_rms))
         self.beam_size = max(1, int(beam_size))
-        # One weight instance is shared by two isolated sessions. Backend calls are serialized.
-        self._inference_lock = threading.Lock()
+        self._on_inference_wait = on_inference_wait
+        self._inference_scheduler = _SharedInferenceScheduler(
+            max_pending=4,
+            deadline_slack_ms=self.partial_interval_samples / 16.0,
+        )
 
     def initialize(self, model_path: str, device: str = "cuda", compute_type: str = "float16"):
         self.model_path = model_path
@@ -182,7 +303,11 @@ class WhisperASRAdapter(ASRAdapter):
         logger.info(f"Warming up Whisper model ({self.backend_type})...")
         dummy_audio = 0.05 * np.sin(2 * np.pi * 440 * np.linspace(0, 1, 16000, dtype=np.float32))
         try:
-            with self._inference_lock:
+            with self._inference_scheduler.acquire(
+                direction=None,
+                is_final=True,
+                audio_end_ns=time.monotonic_ns(),
+            ):
                 if self.backend_type == "faster_whisper":
                     segments, _ = self.model.transcribe(
                         dummy_audio,
@@ -340,9 +465,21 @@ class WhisperASRAdapter(ASRAdapter):
             session.metadata["decode_attempted"] = True
             prompt = session.initial_prompt or getattr(self, "initial_prompt", "")
             try:
-                full_text, model_info = self._decode_audio(combined_audio, session.language, prompt=prompt)
+                full_text, model_info = self._decode_audio(
+                    combined_audio,
+                    session.language,
+                    prompt=prompt,
+                    direction=session.direction,
+                    is_final=False,
+                    audio_end_ns=captured_at_ns,
+                )
             except TypeError:
-                full_text, model_info = self._decode_audio(combined_audio, session.language)
+                try:
+                    full_text, model_info = self._decode_audio(combined_audio, session.language, prompt=prompt)
+                except TypeError:
+                    full_text, model_info = self._decode_audio(combined_audio, session.language)
+
+            self._publish_inference_wait(session, model_info, is_final=False)
 
             if not full_text:
                 return None
@@ -370,7 +507,16 @@ class WhisperASRAdapter(ASRAdapter):
             logger.error(f"Whisper inference error: {e}")
             return None
 
-    def _decode_audio(self, audio_16k: np.ndarray, language: str, prompt: str = "") -> tuple[str, dict[str, Any]]:
+    def _decode_audio(
+        self,
+        audio_16k: np.ndarray,
+        language: str,
+        prompt: str = "",
+        *,
+        direction: Optional[Direction] = None,
+        is_final: bool = False,
+        audio_end_ns: Optional[int] = None,
+    ) -> tuple[str, dict[str, Any]]:
         rms = float(np.sqrt(np.mean(audio_16k ** 2))) if len(audio_16k) else 0.0
         model_info: dict[str, Any] = {
             "backend": self.backend_type,
@@ -381,7 +527,12 @@ class WhisperASRAdapter(ASRAdapter):
         if rms < self.min_audio_rms:
             return "", model_info
 
-        with self._inference_lock:
+        with self._inference_scheduler.acquire(
+            direction=direction,
+            is_final=is_final,
+            audio_end_ns=audio_end_ns,
+        ) as scheduling_info:
+            model_info.update(scheduling_info)
             if self.backend_type == "faster_whisper":
                 segments, info = self.model.transcribe(
                     audio_16k,
@@ -412,6 +563,26 @@ class WhisperASRAdapter(ASRAdapter):
             model_info.update(transformer_info)
             return text, model_info
 
+    def _publish_inference_wait(
+        self,
+        session: ASRSession,
+        model_info: dict[str, Any],
+        *,
+        is_final: bool,
+    ) -> None:
+        if self._on_inference_wait is None or "asr_inference_wait_ms" not in model_info:
+            return
+        sample = {
+            "wait_ms": float(model_info["asr_inference_wait_ms"]),
+            "queue_depth": int(model_info.get("asr_inference_queue_depth", 0)),
+            "deadline_miss_ms": float(model_info.get("asr_inference_deadline_miss_ms", 0.0)),
+            "is_final": is_final,
+        }
+        try:
+            self._on_inference_wait(session, sample)
+        except Exception:
+            logger.debug("ASR inference wait subscriber failed", exc_info=True)
+
     def flush_session(self, session: ASRSession) -> Optional[UtteranceEvent]:
         if not session.audio_buffer:
             session.audio_buffer.clear()
@@ -424,9 +595,20 @@ class WhisperASRAdapter(ASRAdapter):
         try:
             prompt = session.initial_prompt or getattr(self, "initial_prompt", "")
             try:
-                final_text, model_info = self._decode_audio(combined_audio, session.language, prompt=prompt)
+                final_text, model_info = self._decode_audio(
+                    combined_audio,
+                    session.language,
+                    prompt=prompt,
+                    direction=session.direction,
+                    is_final=True,
+                    audio_end_ns=int(session.metadata.get("capture_end_ns", time.monotonic_ns())),
+                )
             except TypeError:
-                final_text, model_info = self._decode_audio(combined_audio, session.language)
+                try:
+                    final_text, model_info = self._decode_audio(combined_audio, session.language, prompt=prompt)
+                except TypeError:
+                    final_text, model_info = self._decode_audio(combined_audio, session.language)
+            self._publish_inference_wait(session, model_info, is_final=True)
         except Exception as exc:
             logger.error("Whisper final inference error: %s", exc)
             final_text = ""

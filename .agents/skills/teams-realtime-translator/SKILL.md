@@ -72,6 +72,10 @@ Apply this workflow whenever the skill matches:
     synthesis. Prepare the selected profile before Ready or meeting start and
     fail visibly with the exact profile error if its reference or conditioning
     is unavailable.
+35. Shared-weight ASR inference must use a bounded, captured-audio-deadline-aware
+    scheduler rather than a bare lock. Reserve bounded priority for outgoing
+    delivery, prevent starvation by queue age, and record wait/deadline-miss
+    telemetry per session and direction.
 
 Before editing, inspect the current implementation and dirty worktree. During
 review, reject growing backlog, committed reordering/loss, false Ready states,
