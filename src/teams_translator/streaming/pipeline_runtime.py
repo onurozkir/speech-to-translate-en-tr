@@ -70,6 +70,8 @@ def reset_asr_utterance(
     session.metadata.pop("last_model_info", None)
     session.metadata.pop("samples_since_decode", None)
     session.metadata.pop("decode_attempted", None)
+    session.metadata.pop("capture_start_ns", None)
+    session.metadata.pop("capture_end_ns", None)
     session.metadata.pop(_CARRIED_PARTIAL_TEXT, None)
     session.metadata.pop(_CARRIED_AUDIO_START_NS, None)
     session.metadata.pop(_CARRIED_MODEL_INFO, None)

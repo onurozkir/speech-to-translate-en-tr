@@ -51,12 +51,18 @@ except Exception as _tts_err:
 class XTTSv2Adapter(TTSAdapter):
     """XTTS-v2 Voice Cloning Adapter with cross-language synthesis and conditioning caching."""
 
-    def __init__(self):
+    def __init__(self, temperature: float = 0.75, speed: float = 1.0):
         self.model: Optional[Any] = None
         self.config: Optional[Any] = None
         self.model_path: str = ""
         self.device: str = "cuda"
         self.sample_rate: int = 24000
+        self.temperature = float(temperature)
+        self.speed = float(speed)
+        if self.temperature <= 0:
+            raise ValueError("XTTS temperature must be greater than zero.")
+        if self.speed <= 0:
+            raise ValueError("XTTS speed must be greater than zero.")
         self._latents_cache: Dict[str, Tuple[Any, Any]] = {}
         self._is_warm = False
 
@@ -111,7 +117,8 @@ class XTTSv2Adapter(TTSAdapter):
                 language="en",
                 gpt_cond_latent=gpt_cond_latent,
                 speaker_embedding=speaker_embedding,
-                temperature=0.75,
+                temperature=self.temperature,
+                speed=self.speed,
                 enable_text_splitting=False,
             )
             self._is_warm = True
@@ -126,8 +133,9 @@ class XTTSv2Adapter(TTSAdapter):
 
         ref_path = Path(profile.reference_audio_path)
         if not ref_path.exists():
-            logger.warning(f"Voice reference audio '{ref_path}' not found. Profile will use default zero latents.")
-            return
+            raise RuntimeError(
+                f"Voice reference audio '{ref_path}' not found for profile '{profile.display_name}'."
+            )
 
         audio_hash = VoiceProfileManager.compute_audio_hash(str(ref_path))
         cache_key = f"{profile.id}_{audio_hash}"
@@ -186,9 +194,9 @@ class XTTSv2Adapter(TTSAdapter):
         if cache_key in self._latents_cache:
             gpt_cond_latent, speaker_embedding = self._latents_cache[cache_key]
         else:
-            # Fallback dummy latents
-            gpt_cond_latent = torch.zeros((1, 30, 1024), device=self.device)
-            speaker_embedding = torch.zeros((1, 512, 1), device=self.device)
+            raise RuntimeError(
+                f"Voice conditioning is unavailable for profile '{profile.display_name}'."
+            )
 
         try:
             out = self.model.inference(
@@ -196,7 +204,8 @@ class XTTSv2Adapter(TTSAdapter):
                 language=target_language,
                 gpt_cond_latent=gpt_cond_latent,
                 speaker_embedding=speaker_embedding,
-                temperature=0.75,
+                temperature=self.temperature,
+                speed=self.speed,
                 enable_text_splitting=False,
             )
             pcm_data = np.asarray(out["wav"], dtype=np.float32)

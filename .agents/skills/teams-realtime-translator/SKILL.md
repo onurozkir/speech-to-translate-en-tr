@@ -61,6 +61,17 @@ Apply this workflow whenever the skill matches:
 31. Normalize Turkish capital dotted-I before matching hallucination patterns.
     Add a regression using the exact correctly-cased phrase whenever a Turkish
     denylist item is introduced.
+32. Preserve the real first-sample and last-sample monotonic capture timestamps
+    through ASR endpoint flush. Event creation time is separate and must never
+    replace the captured audio span used by end-to-end telemetry.
+33. Every exposed ASR, MT, or TTS configuration knob must be wired to its
+    adapter or removed and documented as fixed. Keep latency-protecting partial
+    settings explicit, and do not claim a quality/latency effect without the
+    corresponding benchmark.
+34. Never use dummy or zero conditioning tensors for production voice-clone
+    synthesis. Prepare the selected profile before Ready or meeting start and
+    fail visibly with the exact profile error if its reference or conditioning
+    is unavailable.
 
 Before editing, inspect the current implementation and dirty worktree. During
 review, reject growing backlog, committed reordering/loss, false Ready states,

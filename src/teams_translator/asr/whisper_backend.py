@@ -83,7 +83,12 @@ except ImportError:
 class WhisperASRAdapter(ASRAdapter):
     """Whisper ASR Adapter supporting local offline weights (faster-whisper or HuggingFace)."""
 
-    def __init__(self, partial_interval_ms: int = 500, min_audio_rms: float = 0.003):
+    def __init__(
+        self,
+        partial_interval_ms: int = 500,
+        min_audio_rms: float = 0.003,
+        beam_size: int = 1,
+    ):
         self.model: Optional[Any] = None
         self.processor: Optional[Any] = None
         self.backend_type: str = "transformers"
@@ -93,6 +98,7 @@ class WhisperASRAdapter(ASRAdapter):
         self._is_warm = False
         self.partial_interval_samples = max(1600, int(16000 * partial_interval_ms / 1000.0))
         self.min_audio_rms = max(0.0, float(min_audio_rms))
+        self.beam_size = max(1, int(beam_size))
         # One weight instance is shared by two isolated sessions. Backend calls are serialized.
         self._inference_lock = threading.Lock()
 
@@ -181,7 +187,7 @@ class WhisperASRAdapter(ASRAdapter):
                     segments, _ = self.model.transcribe(
                         dummy_audio,
                         language="tr",
-                        beam_size=1,
+                        beam_size=self.beam_size,
                         temperature=0.0,
                         condition_on_previous_text=False,
                     )
@@ -229,6 +235,7 @@ class WhisperASRAdapter(ASRAdapter):
             generation_config.task = "transcribe"
             generation_config.repetition_penalty = 1.2
             generation_config.no_repeat_ngram_size = 3
+            generation_config.num_beams = self.beam_size
             generation_config.return_dict_in_generate = True
             generation_config.output_scores = True
             
@@ -295,6 +302,16 @@ class WhisperASRAdapter(ASRAdapter):
         if not session.is_active or len(audio_chunk_16k) == 0:
             return None
 
+        captured_samples = session.total_audio_samples + len(audio_chunk_16k)
+        capture_start_ns = captured_at_ns - int((captured_samples / 16000.0) * 1e9)
+        session.metadata["capture_start_ns"] = min(
+            capture_start_ns,
+            int(session.metadata.get("capture_start_ns", capture_start_ns)),
+        )
+        session.metadata["capture_end_ns"] = max(
+            captured_at_ns,
+            int(session.metadata.get("capture_end_ns", captured_at_ns)),
+        )
         session.audio_buffer.append(audio_chunk_16k)
         session.total_audio_samples += len(audio_chunk_16k)
         samples_since_decode = int(session.metadata.get("samples_since_decode", 0)) + len(audio_chunk_16k)
@@ -369,7 +386,7 @@ class WhisperASRAdapter(ASRAdapter):
                 segments, info = self.model.transcribe(
                     audio_16k,
                     language=language,
-                    beam_size=1,
+                    beam_size=self.beam_size,
                     temperature=0.0,
                     condition_on_previous_text=False,
                     vad_filter=False,
@@ -399,6 +416,8 @@ class WhisperASRAdapter(ASRAdapter):
         if not session.audio_buffer:
             session.audio_buffer.clear()
             session.total_audio_samples = 0
+            session.metadata.pop("capture_start_ns", None)
+            session.metadata.pop("capture_end_ns", None)
             return None
 
         combined_audio = np.concatenate(session.audio_buffer)
@@ -416,6 +435,9 @@ class WhisperASRAdapter(ASRAdapter):
             final_text = session.last_partial_text
             model_info = dict(session.metadata.get("last_model_info", model_info))
 
+        now_ns = time.monotonic_ns()
+        audio_start_ns = int(session.metadata.get("capture_start_ns", now_ns))
+        audio_end_ns = int(session.metadata.get("capture_end_ns", now_ns))
         seq_id = session.sequence_id
         session.sequence_id += 1
         session.current_revision = 0
@@ -425,11 +447,12 @@ class WhisperASRAdapter(ASRAdapter):
         session.metadata.pop("samples_since_decode", None)
         session.metadata.pop("decode_attempted", None)
         session.metadata.pop("last_model_info", None)
+        session.metadata.pop("capture_start_ns", None)
+        session.metadata.pop("capture_end_ns", None)
 
         if not final_text:
             return None
 
-        now_ns = time.monotonic_ns()
         return UtteranceEvent(
             meeting_id=session.metadata.get("meeting_id", "local_session"),
             stream_id=session.stream_id,
@@ -440,8 +463,8 @@ class WhisperASRAdapter(ASRAdapter):
             state=UtteranceState.COMMITTED,
             source_language=session.language,
             text=final_text,
-            audio_start_ns=now_ns,
-            audio_end_ns=now_ns,
+            audio_start_ns=audio_start_ns,
+            audio_end_ns=audio_end_ns,
             is_final=True,
             model_info=model_info or {"backend": self.backend_type, "model": self.model_path},
         )
@@ -449,6 +472,8 @@ class WhisperASRAdapter(ASRAdapter):
     def close_session(self, session: ASRSession):
         session.is_active = False
         session.audio_buffer.clear()
+        session.metadata.pop("capture_start_ns", None)
+        session.metadata.pop("capture_end_ns", None)
 
     def shutdown(self):
         self.model = None

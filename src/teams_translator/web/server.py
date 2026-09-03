@@ -39,6 +39,7 @@ def create_app(orchestrator: MeetingOrchestrator) -> FastAPI:
             "type": "status_change",
             "status": orchestrator.status.value,
             "meeting_id": orchestrator.current_meeting_id,
+            "error": orchestrator.last_start_error,
         })
         try:
             while True:

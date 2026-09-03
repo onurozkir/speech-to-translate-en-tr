@@ -31,7 +31,7 @@ except ImportError:
 class CTranslate2MTAdapter(MTAdapter):
     """MT Adapter supporting CTranslate2 INT8 or Hugging Face MarianMT."""
 
-    def __init__(self):
+    def __init__(self, beam_size: int = 2):
         self.tr_en_translator: Optional[Any] = None
         self.en_tr_translator: Optional[Any] = None
         self.tr_fr_translator: Optional[Any] = None
@@ -41,6 +41,7 @@ class CTranslate2MTAdapter(MTAdapter):
         self.backend_type: str = "transformers"  # "ctranslate2" or "transformers"
         self.device = "cpu"
         self.compute_type = "int8"
+        self.beam_size = max(1, int(beam_size))
         self._is_warm = False
 
     def initialize(
@@ -183,7 +184,9 @@ class CTranslate2MTAdapter(MTAdapter):
 
             if self.backend_type == "ctranslate2":
                 tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
-                results = translator.translate_batch([tokens], beam_size=1 if is_partial else 2)
+                results = translator.translate_batch(
+                    [tokens], beam_size=1 if is_partial else self.beam_size
+                )
                 out_tokens = results[0].hypotheses[0]
                 out_text = tokenizer.decode(tokenizer.convert_tokens_to_ids(out_tokens))
                 return out_text.strip()
@@ -195,9 +198,17 @@ class CTranslate2MTAdapter(MTAdapter):
                 
                 if torch is not None:
                     with torch.inference_mode():
-                        translated_tokens = translator.generate(**inputs, max_length=128, num_beams=1 if is_partial else 2)
+                        translated_tokens = translator.generate(
+                            **inputs,
+                            max_length=128,
+                            num_beams=1 if is_partial else self.beam_size,
+                        )
                 else:
-                    translated_tokens = translator.generate(**inputs, max_length=128, num_beams=1 if is_partial else 2)
+                    translated_tokens = translator.generate(
+                        **inputs,
+                        max_length=128,
+                        num_beams=1 if is_partial else self.beam_size,
+                    )
 
                 out_text = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)
                 return out_text[0].strip() if out_text else text

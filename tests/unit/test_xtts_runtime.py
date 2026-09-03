@@ -1,7 +1,56 @@
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
 from teams_translator.tts import xtts_backend
+from teams_translator.tts.base import VoiceProfile
+from teams_translator.tts.conditioning import VoiceProfileManager
 
 
 def test_coqui_xtts_runtime_imports_are_available():
     assert xtts_backend.torch is not None
     assert xtts_backend.XttsConfig is not None, xtts_backend._tts_import_error
     assert xtts_backend.Xtts is not None, xtts_backend._tts_import_error
+
+
+def test_xtts_uses_configured_temperature_and_speed(tmp_path):
+    received = {}
+
+    class FakeModel:
+        def inference(self, **kwargs):
+            received.update(kwargs)
+            return {"wav": [0.0, 0.1]}
+
+    reference = tmp_path / "reference.wav"
+    reference.write_bytes(b"voice")
+    profile = VoiceProfile("onur", "Onur", "xtts_v2", str(reference))
+    adapter = xtts_backend.XTTSv2Adapter(temperature=0.55, speed=1.15)
+    adapter.model = FakeModel()
+    cache_key = f"{profile.id}_{VoiceProfileManager.compute_audio_hash(str(reference))}"
+    adapter._latents_cache[cache_key] = (SimpleNamespace(), SimpleNamespace())
+
+    chunks = list(adapter.synthesize_committed("Hello", profile, "en"))
+
+    assert len(chunks) == 1
+    assert chunks[0].dtype == np.float32
+    assert received["temperature"] == 0.55
+    assert received["speed"] == 1.15
+
+
+def test_xtts_missing_reference_fails_instead_of_using_zero_latents(tmp_path):
+    class FakeModel:
+        def inference(self, **kwargs):
+            pytest.fail("inference must not run without voice conditioning")
+
+    profile = VoiceProfile(
+        "missing",
+        "Missing Voice",
+        "xtts_v2",
+        str(tmp_path / "missing.wav"),
+    )
+    adapter = xtts_backend.XTTSv2Adapter()
+    adapter.model = FakeModel()
+
+    with pytest.raises(RuntimeError, match="Voice reference audio.*not found"):
+        list(adapter.synthesize_committed("Hello", profile, "en"))

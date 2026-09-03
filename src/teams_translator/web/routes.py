@@ -36,6 +36,7 @@ def create_routes(orchestrator: MeetingOrchestrator) -> APIRouter:
         return {
             "status": orchestrator.status.value,
             "meeting_id": orchestrator.current_meeting_id,
+            "error": orchestrator.last_start_error,
             "system": SystemResourceMonitor.get_stats(),
         }
 

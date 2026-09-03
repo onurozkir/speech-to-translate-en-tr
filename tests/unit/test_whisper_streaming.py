@@ -10,7 +10,7 @@ from teams_translator.core.types import Direction
 
 
 def test_huggingface_decode_uses_one_length_owner_and_current_language():
-    adapter = WhisperASRAdapter(min_audio_rms=0.0)
+    adapter = WhisperASRAdapter(min_audio_rms=0.0, beam_size=3)
 
     class FakeProcessor:
         def __call__(self, audio, sampling_rate, return_tensors):
@@ -46,6 +46,7 @@ def test_huggingface_decode_uses_one_length_owner_and_current_language():
     assert adapter.model.received.forced_decoder_ids is None
     assert adapter.model.received.language == "tr"
     assert adapter.model.received.task == "transcribe"
+    assert adapter.model.received.num_beams == 3
 
 
 def test_initialize_resolves_unavailable_cuda_to_cpu(monkeypatch, tmp_path, caplog):
@@ -130,6 +131,31 @@ def test_flush_redecodes_complete_buffer_instead_of_committing_stale_partial():
     assert event.model_info["audio_samples"] == 8000
     assert session.audio_buffer == []
     assert session.total_audio_samples == 0
+
+
+def test_flush_preserves_real_capture_span_and_resets_it_for_next_utterance():
+    adapter = WhisperASRAdapter(min_audio_rms=0.0)
+    adapter.model = object()
+    adapter._decode_audio = lambda audio, language: (
+        "Merhaba",
+        {"avg_logprob": -0.2},
+    )
+    session = adapter.create_session("tx", Direction.OUTGOING, "tr")
+
+    adapter.process_audio(session, np.ones(3200, dtype=np.float32), 1_000_000_000)
+    adapter.process_audio(session, np.ones(4800, dtype=np.float32), 1_300_000_000)
+    event = adapter.flush_session(session)
+
+    assert event is not None
+    assert event.audio_start_ns == 800_000_000
+    assert event.audio_end_ns == 1_300_000_000
+
+    adapter.process_audio(session, np.ones(4800, dtype=np.float32), 2_000_000_000)
+    next_event = adapter.flush_session(session)
+
+    assert next_event is not None
+    assert next_event.audio_start_ns == 1_700_000_000
+    assert next_event.audio_end_ns == 2_000_000_000
 
 
 def test_strip_prompt_prefix():
