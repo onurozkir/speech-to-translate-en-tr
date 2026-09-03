@@ -60,6 +60,8 @@ tr_fr_model_path = "models/mt/opus-mt-tr-fr"
 device = "cpu"
 compute_type = "int8"
 beam_size = 2
+# Committed translations use this value; replaceable partials stay greedy (beam 1)
+# to protect the live partial latency budget.
 
 [tts]
 backend = "xtts_v2"

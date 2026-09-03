@@ -79,6 +79,7 @@ class MeetingOrchestrator:
 
     async def initialize_and_warmup(self):
         """Initializes and warms all models before marking READY."""
+        self.last_start_error = None
         self.status = MeetingStatus.STARTING
         self._broadcast_status()
 
@@ -92,9 +93,15 @@ class MeetingOrchestrator:
                 self.asr_adapter = WhisperASRAdapter(
                     partial_interval_ms=self.config.asr.partial_interval_ms,
                     min_audio_rms=self.config.asr.min_audio_rms,
+                    beam_size=self.config.asr.beam_size,
                 )
-                self.mt_adapter = CTranslate2MTAdapter()
-                self.tts_adapter = XTTSv2Adapter()
+                self.mt_adapter = CTranslate2MTAdapter(
+                    beam_size=self.config.translation.beam_size,
+                )
+                self.tts_adapter = XTTSv2Adapter(
+                    temperature=self.config.tts.temperature,
+                    speed=self.config.tts.speed,
+                )
 
             # Initialize models offline
             self.asr_adapter.initialize(
@@ -126,6 +133,8 @@ class MeetingOrchestrator:
 
             # Warm voice profile
             default_profile = self.profile_manager.get_default_profile()
+            if not self.use_mocks and default_profile is None:
+                raise RuntimeError("No default voice profile is available for outgoing TTS.")
             if default_profile:
                 self.tts_adapter.prepare_voice_profile(default_profile)
 
@@ -135,6 +144,7 @@ class MeetingOrchestrator:
             self._broadcast_status()
             logger.info("MeetingOrchestrator is READY.")
         except Exception as e:
+            self.last_start_error = str(e)
             self.status = MeetingStatus.ERROR
             self._broadcast_status()
             logger.error(f"Failed to initialize models/adapters: {e}")
@@ -156,7 +166,8 @@ class MeetingOrchestrator:
         if self.status != MeetingStatus.READY:
             if self.status == MeetingStatus.ERROR:
                 raise RuntimeError(
-                    "Models failed to initialize or are missing. If models are not yet downloaded, launch with '--mock' (python src/teams_translator/main.py run --mock) or download models via 'python scripts/download_models.py all'."
+                    self.last_start_error
+                    or "Models failed to initialize or are missing. If models are not yet downloaded, launch with '--mock' (python src/teams_translator/main.py run --mock) or download models manually."
                 )
             if self.status in (MeetingStatus.STARTING, MeetingStatus.WARMING):
                 raise RuntimeError("Models are still warming up. Please wait for the READY status.")
@@ -205,6 +216,13 @@ class MeetingOrchestrator:
         if not self.use_mocks and profile is None:
             self.current_meeting_id = None
             raise RuntimeError("No valid voice profile is available for outgoing TTS.")
+        if not self.use_mocks:
+            try:
+                self.tts_adapter.prepare_voice_profile(profile)
+            except Exception as exc:
+                self.last_start_error = str(exc)
+                self.current_meeting_id = None
+                raise
 
         # Outgoing Pipeline
         if mic_dev and ren_dev:
@@ -293,6 +311,10 @@ class MeetingOrchestrator:
         profile = self.profile_manager.get_profile(profile_id)
         if not profile:
             raise RuntimeError(f"Voice profile '{profile_id}' not found.")
+        if not self.use_mocks:
+            if self.tts_adapter is None:
+                raise RuntimeError("TTS adapter is not initialized.")
+            self.tts_adapter.prepare_voice_profile(profile)
         if self.outgoing_pipeline:
             self.outgoing_pipeline.set_voice_profile(profile)
         logger.info("Switched active voice profile to '%s' (%s)", profile.display_name, profile_id)
@@ -321,6 +343,7 @@ class MeetingOrchestrator:
             "type": "status_change",
             "status": self.status.value,
             "meeting_id": self.current_meeting_id,
+            "error": self.last_start_error,
         })
 
     async def shutdown(self):

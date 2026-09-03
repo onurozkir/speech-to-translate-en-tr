@@ -17,6 +17,7 @@ def test_web_api_endpoints():
     data = res.json()
     assert "status" in data
     assert "system" in data
+    assert "error" in data
 
     # Test devices endpoint
     res = client.get("/api/devices")

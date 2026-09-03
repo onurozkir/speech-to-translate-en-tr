@@ -29,6 +29,12 @@ def test_turkish_capital_dotted_i_matches_lowercase_hallucination_pattern():
     assert decision.reason == "known_hallucination_pattern"
 
 
+def test_short_turkish_subscribe_hallucination_is_rejected():
+    decision = HallucinationGuard().evaluate("Abone ol.", GOOD_EVIDENCE)
+    assert not decision.accepted
+    assert decision.reason == "known_hallucination_pattern"
+
+
 def test_whisper_metadata_can_reject_no_speech_and_repetition():
     guard = HallucinationGuard()
     assert guard.evaluate("apparently valid", GOOD_EVIDENCE, {"no_speech_prob": 0.95}).reason == "whisper_no_speech"

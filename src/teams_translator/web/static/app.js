@@ -157,7 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // 3. Fetch status
       const statRes = await fetch("/api/status");
       const statData = await statRes.json();
-      updateStatus(statData.status, statData.meeting_id);
+      updateStatus(statData.status, statData.meeting_id, statData.error);
       if (statData.system) updateSystemStats(statData.system);
 
     } catch (e) {
@@ -234,7 +234,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleServerEvent(data) {
     switch (data.type) {
       case "status_change":
-        updateStatus(data.status, data.meeting_id);
+        updateStatus(data.status, data.meeting_id, data.error);
         break;
 
       case "asr_partial":
@@ -273,7 +273,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function updateStatus(status, meetingId) {
+  function updateStatus(status, meetingId, error) {
     const norm = (status || "").toLowerCase();
     currentMeetingStatus = norm;
     statusBadge.className = `status-badge status-${norm}`;
@@ -283,6 +283,10 @@ document.addEventListener("DOMContentLoaded", () => {
       btnStart.style.display = "none";
       btnStop.style.display = "block";
       meetingIdLabel.textContent = `Meeting: ${meetingId || "Active"}`;
+    } else if (norm === "error" && error) {
+      btnStart.style.display = "block";
+      btnStop.style.display = "none";
+      meetingIdLabel.textContent = `Error: ${error}`;
     } else {
       btnStart.style.display = "block";
       btnStop.style.display = "none";
