@@ -227,7 +227,7 @@ select:focus {
   padding: 1rem;
   overflow-y: auto;
   min-height: 180px;
-  max-height: 300px;
+  max-height: 565px;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;

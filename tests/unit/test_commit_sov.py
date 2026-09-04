@@ -106,3 +106,4 @@ def test_adaptive_sov_disabled_for_non_turkish():
     # Even if predicate matches Turkish pattern or English text, language="en" does not trigger sov
     dec = ctrl.evaluate("I did it", silence_ms=300.0, language="en")
     assert not dec.should_commit or dec.reason != "turkish_sov_verb"
+
