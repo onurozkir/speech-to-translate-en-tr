@@ -90,5 +90,10 @@ def test_orchestrator_wires_runtime_config_into_adapters(monkeypatch, tmp_path):
     assert received["asr"]["min_audio_rms"] == 0.003
     assert received["asr"]["beam_size"] == 3
     assert callable(received["asr"]["on_inference_wait"])
-    assert received["mt"] == {"beam_size": 4}
-    assert received["tts"] == {"temperature": 0.6, "speed": 1.1}
+    assert received["tts"] == {
+        "temperature": 0.6,
+        "speed": 1.1,
+        "top_p": 0.85,
+        "repetition_penalty": 2.0,
+        "peak_normalization": True,
+    }

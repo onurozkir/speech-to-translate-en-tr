@@ -15,6 +15,7 @@ class VoiceProfile:
     display_name: str
     backend: str
     reference_audio_path: str
+    reference_audio_paths: List[str] = field(default_factory=list)
     reference_text: Optional[str] = None
     reference_language: str = "tr"
     target_language: str = "en"
@@ -22,6 +23,17 @@ class VoiceProfile:
     is_default: bool = False
     conditioning_cache_path: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def all_reference_paths(self) -> List[str]:
+        """Returns all reference audio paths, combining reference_audio_path and reference_audio_paths."""
+        paths: List[str] = []
+        if self.reference_audio_path:
+            paths.append(self.reference_audio_path)
+        for p in self.reference_audio_paths:
+            if p and p not in paths:
+                paths.append(p)
+        return paths
 
 
 class TTSAdapter(abc.ABC):

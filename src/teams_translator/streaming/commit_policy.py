@@ -19,6 +19,74 @@ class CommitDecision:
     reason: str  # "punctuation", "stable_prefix", "silence_endpoint", "deadline_timeout"
 
 
+# Punctuation / conjunction clause delimiters
+_PUNCT_REGEX = re.compile(r'([.?!;:]+)(\s+|$)', re.UNICODE)
+_CONJUNCTION_REGEX = re.compile(r'(\s+(?:ve|veya|ama|fakat|ancak|çünkü|ise|ki|böylece)\s+)', re.IGNORECASE | re.UNICODE)
+
+# Turkish SOV (Subject-Object-Verb) predicate suffix patterns
+_TURKISH_VERB_SUFFIXES = (
+    # Past: -di/-ti family with personal markers
+    r'[a-zçğıöşü]+(?:[dD][ıİuÜ]|[tT][ıİuÜ])(?:[kKmMnN]|n[ıİzZ]|l[aA]r)?'
+    # Present continuous: -iyor family
+    r'|[a-zçğıöşü]+[ıİuÜ]yor(?:[uU]m|[uU]z|[sS][uU]n|[sS][uU]n[uU]z|l[aA]r)?'
+    # Future: -ecek/-acak family
+    r'|[a-zçğıöşü]+(?:[eE]ce|[aA]ca)[gğkK](?:[ıİuÜ]m|[ıİuÜ]z|[sS][ıİ][nN]|l[aA]r)?'
+    # Aorist: -ir/-er/-ar family
+    r'|[a-zçğıöşü]+(?:[ıİuÜeEaA]r)(?:[ıİuÜeEaA]m|[ıİuÜeEaA]z|[sS][ıİ][nN])?'
+    # Evidential: -miş family
+    r'|[a-zçğıöşü]+(?:[mM][ıİuÜ]ş)(?:[tT][ıİ]r|[ıİuÜ]m|[ıİuÜ]z|[sS][ıİ][nN])?'
+    # Necessitative/Optative/Imperative: -meli/-elim family
+    r'|[a-zçğıöşü]+(?:[mM][eE]li|[mM][aA]l[ıİ]|[eE]lim|[aA]l[ıİ]m|[sS][iİ]n|[sS][ıİ]n|[sS][uU]n|[sS][üÜ]n)'
+    # Common copulas, auxiliary predicates, and adjectives
+    r'|(?:yaptım|yaptık|yaptı|yaptınız|ettim|ettik|etti|oldu|bitti|geldi|gittim|gitti|'
+    r'gördüm|gördük|aldım|aldık|verdim|verdik|başladı|bitirdi|vardı|yoktu|değil|'
+    r'değilim|değiliz|var|yok|tamam|hazır|doğru|iyi|güzel|mümkün|lazım|gerek|olur)'
+    # Question particles
+    r'|(?:mı|mi|mu|mü|mıyım|miyiz|musun|müsünüz)'
+)
+_TURKISH_PREDICATE_REGEX = re.compile(r'^(?:' + _TURKISH_VERB_SUFFIXES + r')$', re.IGNORECASE | re.UNICODE)
+
+_TURKISH_OPEN_CONJUNCTIONS = {
+    "ve", "veya", "ama", "fakat", "ancak", "çünkü", "ile", "ise", "ki",
+    "lakin", "halbuki", "oysa", "veyahut", "gibi", "için", "diye", "kadar"
+}
+
+_TURKISH_NON_PREDICATES = {
+    # Non-predicate nouns ending in -tı / -ti / -tu / -tü (deverbal noun suffixes)
+    "toplantı", "toplantısı", "toplantılar", "toplantıları",
+    "görüntü", "görüntüsü", "görüntüler",
+    "alıntı", "alıntılar", "belirti", "belirtiler",
+    "yaşantı", "akıntı", "bağıntı", "sıkıntı", "sıkıntılar", "sızıntı", "kasıntı",
+    # Common words matching -r aorist pattern but are nouns/determiners
+    "bir", "her", "kadar", "tekrar", "karar", "zarar", "fikir", "şehir", "demir",
+    "müdür", "doktor", "rapor", "lider", "haber", "biber", "duvar", "pazar",
+    # Common nouns/adverbs matching other suffix patterns
+    "şirket", "şirkette", "şirketteki", "toplantıdaki",
+    "zaman", "insan", "bölüm", "durum", "konu", "taraf", "tarafından",
+    "şey", "şeyler", "gün", "hafta", "ay", "yıl", "dakika", "saniye",
+}
+
+
+def is_turkish_predicate_tail(text: str) -> bool:
+    """Check whether the final word of text is a complete Turkish finite predicate."""
+    words = text.strip().split()
+    if not words:
+        return False
+    tail = words[-1].rstrip(".,?!:;").casefold().replace("i\u0307", "i")
+    if not tail or tail in _TURKISH_OPEN_CONJUNCTIONS or tail in _TURKISH_NON_PREDICATES:
+        return False
+    return bool(_TURKISH_PREDICATE_REGEX.match(tail))
+
+
+def is_open_conjunction_tail(text: str) -> bool:
+    """Check whether the text ends with an open conjunction indicating mid-clause pause."""
+    words = text.strip().split()
+    if not words:
+        return False
+    tail = words[-1].rstrip(".,?!:;").casefold().replace("i\u0307", "i")
+    return tail in _TURKISH_OPEN_CONJUNCTIONS
+
+
 class CommitController:
     """Manages irreversible commit decisions from streaming ASR hypotheses."""
 
@@ -27,10 +95,14 @@ class CommitController:
         min_words: int = 3,
         max_wait_ms: int = 1800,
         stable_prefix_min_count: int = 2,
+        enable_adaptive_sov: bool = True,
+        sov_min_silence_ms: int = 200,
     ):
         self.min_words = min_words
         self.max_wait_ms = max_wait_ms
         self.stable_prefix_min_count = stable_prefix_min_count
+        self.enable_adaptive_sov = enable_adaptive_sov
+        self.sov_min_silence_ms = sov_min_silence_ms
 
         self.last_hypotheses: List[str] = []
         self.first_hypothesis_time_ms: float = 0
@@ -38,8 +110,8 @@ class CommitController:
         self.stable_prefix_matches = 0
 
         # Punctuation / conjunction clause delimiters
-        self._punct_regex = re.compile(r'([.?!;:]+)(\s+|$)', re.UNICODE)
-        self._conjunction_regex = re.compile(r'(\s+(?:ve|veya|ama|fakat|ancak|çünkü|ise|ki|böylece)\s+)', re.IGNORECASE | re.UNICODE)
+        self._punct_regex = _PUNCT_REGEX
+        self._conjunction_regex = _CONJUNCTION_REGEX
 
     def reset(self):
         self.last_hypotheses.clear()
@@ -52,6 +124,8 @@ class CommitController:
         current_text: str,
         is_silence_endpoint: bool = False,
         now_ms: Optional[float] = None,
+        silence_ms: float = 0.0,
+        language: str = "tr",
     ) -> CommitDecision:
         current_text = current_text.strip()
         if not current_text:
@@ -63,6 +137,7 @@ class CommitController:
 
         words = current_text.split()
         elapsed_wait_ms = now - self.first_hypothesis_time_ms
+        is_tr = language.lower().startswith("tr")
 
         # 1. Silence Endpoint flush
         if is_silence_endpoint:
@@ -89,7 +164,20 @@ class CommitController:
                     reason="punctuation",
                 )
 
-        # 3. Stable prefix detection across consecutive revisions
+        # 3. Adaptive Turkish SOV Verb Endpointing
+        # When a complete predicate/verb is detected at sentence tail, commit after short silence (e.g. 200ms)
+        # instead of waiting out the full ~950ms VAD hangover!
+        if self.enable_adaptive_sov and is_tr and len(words) >= self.min_words:
+            if is_turkish_predicate_tail(current_text) and silence_ms >= self.sov_min_silence_ms:
+                self.reset()
+                return CommitDecision(
+                    should_commit=True,
+                    committed_text=current_text,
+                    remaining_partial_text="",
+                    reason="turkish_sov_verb",
+                )
+
+        # 4. Stable prefix detection across consecutive revisions
         self.last_hypotheses.append(current_text)
         if len(self.last_hypotheses) > 5:
             self.last_hypotheses.pop(0)
@@ -105,6 +193,16 @@ class CommitController:
                     self.stable_prefix_matches = 1
 
                 if self.stable_prefix_matches >= self.stable_prefix_min_count:
+                    # If entire stable utterance ends with a confirmed Turkish predicate, commit early
+                    if self.enable_adaptive_sov and is_tr and is_turkish_predicate_tail(common_prefix):
+                        self.reset()
+                        return CommitDecision(
+                            should_commit=True,
+                            committed_text=common_prefix,
+                            remaining_partial_text=current_text[len(common_prefix):].strip(),
+                            reason="turkish_sov_verb",
+                        )
+
                     # Check for conjunction boundary within stable prefix
                     conj_match = self._conjunction_regex.search(common_prefix)
                     if conj_match:
@@ -123,8 +221,9 @@ class CommitController:
                 self.stable_prefix_candidate = ""
                 self.stable_prefix_matches = 0
 
-        # 4. Max wait deadline timeout
-        if elapsed_wait_ms >= self.max_wait_ms and len(words) >= self.min_words:
+        # 5. Max wait deadline timeout
+        effective_max_wait = self.max_wait_ms * 1.5 if (is_tr and is_open_conjunction_tail(current_text)) else self.max_wait_ms
+        if elapsed_wait_ms >= effective_max_wait and len(words) >= self.min_words:
             committed, remainder = self._deadline_safe_split(current_text)
             if committed:
                 self.reset()

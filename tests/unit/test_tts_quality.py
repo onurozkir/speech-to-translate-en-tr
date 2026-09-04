@@ -1,0 +1,118 @@
+from types import SimpleNamespace
+from pathlib import Path
+import numpy as np
+import pytest
+
+from teams_translator.tts import xtts_backend
+from teams_translator.tts.base import VoiceProfile
+from teams_translator.tts.conditioning import VoiceProfileManager
+
+
+def test_xtts_hyperparameters_validation():
+    # Valid parameters
+    adapter = xtts_backend.XTTSv2Adapter(
+        temperature=0.65,
+        speed=1.0,
+        top_p=0.85,
+        repetition_penalty=2.0,
+        peak_normalization=True,
+    )
+    assert adapter.temperature == 0.65
+    assert adapter.top_p == 0.85
+    assert adapter.repetition_penalty == 2.0
+    assert adapter.peak_normalization is True
+
+    # Invalid top_p
+    with pytest.raises(ValueError, match="top_p"):
+        xtts_backend.XTTSv2Adapter(top_p=0.0)
+    with pytest.raises(ValueError, match="top_p"):
+        xtts_backend.XTTSv2Adapter(top_p=1.5)
+
+    # Invalid repetition_penalty
+    with pytest.raises(ValueError, match="repetition_penalty"):
+        xtts_backend.XTTSv2Adapter(repetition_penalty=-1.0)
+
+
+def test_xtts_inference_passes_hyperparameters(tmp_path):
+    received = {}
+
+    class FakeModel:
+        def inference(self, **kwargs):
+            received.update(kwargs)
+            # Output audio with peak 1.5 (clipping)
+            return {"wav": [0.0, 1.5, -1.2, 0.5]}
+
+    ref1 = tmp_path / "reference.wav"
+    ref1.write_bytes(b"sample1")
+
+    profile = VoiceProfile(
+        id="speaker_1",
+        display_name="Speaker 1",
+        backend="xtts_v2",
+        reference_audio_path=str(ref1),
+    )
+
+    adapter = xtts_backend.XTTSv2Adapter(
+        temperature=0.65,
+        speed=1.05,
+        top_p=0.82,
+        repetition_penalty=2.2,
+        peak_normalization=True,
+    )
+    adapter.model = FakeModel()
+    cache_key = f"{profile.id}_{VoiceProfileManager.compute_audio_hash(str(ref1))}"
+    adapter._latents_cache[cache_key] = (SimpleNamespace(), SimpleNamespace())
+
+    chunks = list(adapter.synthesize_committed("Hello world", profile, "en"))
+
+    assert len(chunks) == 1
+    pcm = chunks[0]
+    assert received["temperature"] == 0.65
+    assert received["speed"] == 1.05
+    assert received["top_p"] == 0.82
+    assert received["repetition_penalty"] == 2.2
+
+    # Peak normalization should have scaled peak from 1.5 to ~0.89125 (-1.0 dBFS)
+    peak = float(np.max(np.abs(pcm)))
+    assert pytest.approx(peak, abs=1e-4) == 0.89125
+    assert peak < 1.0
+
+
+def test_multi_sample_hash_and_conditioning(tmp_path):
+    ref1 = tmp_path / "reference_1.wav"
+    ref2 = tmp_path / "reference_2.wav"
+    ref1.write_bytes(b"sample1")
+    ref2.write_bytes(b"sample2")
+
+    profile = VoiceProfile(
+        id="multi_speaker",
+        display_name="Multi Speaker",
+        backend="xtts_v2",
+        reference_audio_path=str(ref1),
+        reference_audio_paths=[str(ref2)],
+        conditioning_cache_path=str(tmp_path / "cache"),
+    )
+
+    assert profile.all_reference_paths == [str(ref1), str(ref2)]
+
+    hash_single = VoiceProfileManager.compute_audio_hash(str(ref1))
+    hash_multi = VoiceProfileManager.compute_audio_hash(profile.all_reference_paths)
+
+    assert hash_single != ""
+    assert hash_multi != ""
+    assert hash_single != hash_multi
+
+    observed_audio_paths = []
+
+    class FakeModel:
+        def get_conditioning_latents(self, **kwargs):
+            observed_audio_paths.extend(kwargs.get("audio_path", []))
+            return SimpleNamespace(), SimpleNamespace()
+
+    adapter = xtts_backend.XTTSv2Adapter()
+    adapter.model = FakeModel()
+    adapter.prepare_voice_profile(profile)
+
+    assert len(observed_audio_paths) == 2
+    assert str(ref1.resolve()) in observed_audio_paths
+    assert str(ref2.resolve()) in observed_audio_paths
