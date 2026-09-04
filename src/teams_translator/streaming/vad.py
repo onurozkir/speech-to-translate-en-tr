@@ -36,6 +36,7 @@ class VADResult:
     voiced_ms: float
     voiced_ratio: float
     model_backend: str
+    silence_ms: float = 0.0
 
 
 class SileroVAD:
@@ -135,6 +136,7 @@ class SileroVAD:
             voiced_ms=self._voiced_ms,
             voiced_ratio=ratio,
             model_backend=self.backend,
+            silence_ms=self._silence_ms,
         )
         self._last_result = result
         return result

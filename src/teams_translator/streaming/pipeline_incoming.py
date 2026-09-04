@@ -59,6 +59,7 @@ class IncomingPipeline:
             min_words=config.streaming.commit_min_words,
             max_wait_ms=config.streaming.commit_max_wait_ms,
             stable_prefix_min_count=config.streaming.stable_prefix_min_count,
+            enable_adaptive_sov=False,
         )
         self.resampler_in = AudioResampler(in_rate=config.audio.sample_rate, out_rate=16000, streaming=True)
         self.asr_session: Optional[ASRSession] = None
@@ -164,7 +165,12 @@ class IncomingPipeline:
                 evidence = speech_evidence(vad_result, self._current_max_queue_age_ms)
                 guard = self.guard.evaluate(event.text, evidence, event.model_info)
                 if guard.accepted:
-                    decision = self.commit_controller.evaluate(event.text, now_ms=time.monotonic() * 1000.0)
+                    decision = self.commit_controller.evaluate(
+                        event.text,
+                        now_ms=time.monotonic() * 1000.0,
+                        silence_ms=getattr(vad_result, "silence_ms", 0.0),
+                        language=getattr(self.config.asr, "language_loopback", "en"),
+                    )
                     if decision.should_commit and self._handle_commit(
                         decision.committed_text,
                         event.audio_start_ns,
@@ -181,6 +187,7 @@ class IncomingPipeline:
                                 text=decision.remaining_partial_text,
                             )
                         else:
+                            reset_asr_utterance(self.asr_session)
                             return
                     self._submit_queue(self.partial_queue, event, "incoming_partial")
                 elif guard.reason in {

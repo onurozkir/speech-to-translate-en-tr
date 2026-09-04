@@ -126,6 +126,9 @@ class MeetingOrchestrator:
                 self.tts_adapter = XTTSv2Adapter(
                     temperature=self.config.tts.temperature,
                     speed=self.config.tts.speed,
+                    top_p=self.config.tts.top_p,
+                    repetition_penalty=self.config.tts.repetition_penalty,
+                    peak_normalization=self.config.tts.peak_normalization,
                 )
 
             # Initialize models offline

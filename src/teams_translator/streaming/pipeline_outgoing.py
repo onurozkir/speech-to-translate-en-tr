@@ -70,6 +70,8 @@ class OutgoingPipeline:
             min_words=config.streaming.commit_min_words,
             max_wait_ms=config.streaming.commit_max_wait_ms,
             stable_prefix_min_count=config.streaming.stable_prefix_min_count,
+            enable_adaptive_sov=getattr(config.streaming, "enable_adaptive_sov", True),
+            sov_min_silence_ms=getattr(config.streaming, "sov_min_silence_ms", 200),
         )
         self.resampler_in = AudioResampler(in_rate=config.audio.sample_rate, out_rate=16000, streaming=True)
         self.asr_session: Optional[ASRSession] = None
@@ -186,7 +188,12 @@ class OutgoingPipeline:
                 evidence = speech_evidence(vad_result, self._current_max_queue_age_ms)
                 decision = self.guard.evaluate(event.text, evidence, event.model_info)
                 if decision.accepted:
-                    commit = self.commit_controller.evaluate(event.text, now_ms=time.monotonic() * 1000.0)
+                    commit = self.commit_controller.evaluate(
+                        event.text,
+                        now_ms=time.monotonic() * 1000.0,
+                        silence_ms=getattr(vad_result, "silence_ms", 0.0),
+                        language=getattr(self.config.asr, "language_mic", "tr"),
+                    )
                     if commit.should_commit and self._handle_commit(
                         commit.committed_text,
                         event.audio_start_ns,
@@ -203,6 +210,7 @@ class OutgoingPipeline:
                                 text=commit.remaining_partial_text,
                             )
                         else:
+                            reset_asr_utterance(self.asr_session)
                             return
                     self._emit_event({
                         "type": "asr_partial", "direction": "outgoing", "text": event.text,

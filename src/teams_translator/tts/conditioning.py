@@ -42,6 +42,24 @@ class VoiceProfileManager:
                         if not ref_audio_path.is_absolute():
                             ref_audio_path = profile_dir / ref_audio
 
+                        # Multi-sample reference audio discovery
+                        multi_refs = data.get("reference_audio_paths", [])
+                        resolved_multi: List[str] = []
+                        if isinstance(multi_refs, list):
+                            for m in multi_refs:
+                                mp = Path(m)
+                                if not mp.is_absolute():
+                                    mp = profile_dir / m
+                                if mp.exists():
+                                    resolved_multi.append(str(mp.resolve()))
+
+                        # Auto-discover reference_*.wav, ref_*.wav, sample_*.wav in profile_dir
+                        for pattern in ["reference_*.wav", "ref_*.wav", "sample_*.wav"]:
+                            for found_path in sorted(profile_dir.glob(pattern)):
+                                abs_p = str(found_path.resolve())
+                                if abs_p not in resolved_multi and abs_p != str(ref_audio_path.resolve()):
+                                    resolved_multi.append(abs_p)
+
                         cache_dir = profile_dir / "cache"
                         cache_dir.mkdir(exist_ok=True)
 
@@ -56,6 +74,7 @@ class VoiceProfileManager:
                             display_name=data.get("display_name", profile_id),
                             backend=data.get("backend", "xtts_v2"),
                             reference_audio_path=str(ref_audio_path.resolve()),
+                            reference_audio_paths=resolved_multi,
                             reference_text=data.get("reference_text"),
                             reference_language=data.get("reference_language", "tr"),
                             target_language=data.get("target_language", target_langs[0] if target_langs else "en"),
@@ -83,14 +102,25 @@ class VoiceProfileManager:
         return list(self.profiles.values())
 
     @staticmethod
-    def compute_audio_hash(audio_path: str) -> str:
-        """Compute SHA256 of reference audio file for cache keying."""
-        p = Path(audio_path)
-        if not p.exists():
+    def compute_audio_hash(audio_paths: str | List[str] | Path) -> str:
+        """Compute SHA256 of reference audio file(s) for cache keying."""
+        if isinstance(audio_paths, (str, Path)):
+            paths = [Path(audio_paths)]
+        elif isinstance(audio_paths, list):
+            paths = [Path(p) for p in audio_paths]
+        else:
+            paths = []
+
+        existing_paths = [p for p in paths if p.exists()]
+        if not existing_paths:
             return ""
+
         hasher = hashlib.sha256()
-        with open(p, "rb") as f:
-            while chunk := f.read(65536):
-                hasher.update(chunk)
+        # Sort by filename to ensure deterministic hashing
+        for p in sorted(existing_paths, key=lambda x: str(x)):
+            hasher.update(p.name.encode("utf-8"))
+            with open(p, "rb") as f:
+                while chunk := f.read(65536):
+                    hasher.update(chunk)
         return hasher.hexdigest()
 

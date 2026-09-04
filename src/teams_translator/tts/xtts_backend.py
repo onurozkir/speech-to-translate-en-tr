@@ -71,7 +71,14 @@ except Exception as _tts_err:
 class XTTSv2Adapter(TTSAdapter):
     """XTTS-v2 Voice Cloning Adapter with cross-language synthesis and conditioning caching."""
 
-    def __init__(self, temperature: float = 0.75, speed: float = 1.0):
+    def __init__(
+        self,
+        temperature: float = 0.65,
+        speed: float = 1.0,
+        top_p: float = 0.85,
+        repetition_penalty: float = 2.0,
+        peak_normalization: bool = True,
+    ):
         self.model: Optional[Any] = None
         self.config: Optional[Any] = None
         self.model_path: str = ""
@@ -79,10 +86,17 @@ class XTTSv2Adapter(TTSAdapter):
         self.sample_rate: int = 24000
         self.temperature = float(temperature)
         self.speed = float(speed)
+        self.top_p = float(top_p)
+        self.repetition_penalty = float(repetition_penalty)
+        self.peak_normalization = bool(peak_normalization)
         if self.temperature <= 0:
             raise ValueError("XTTS temperature must be greater than zero.")
         if self.speed <= 0:
             raise ValueError("XTTS speed must be greater than zero.")
+        if self.top_p <= 0 or self.top_p > 1.0:
+            raise ValueError("XTTS top_p must be between 0 and 1.0.")
+        if self.repetition_penalty <= 0:
+            raise ValueError("XTTS repetition_penalty must be greater than zero.")
         self._latents_cache: Dict[str, Tuple[Any, Any]] = {}
         self._is_warm = False
 
@@ -139,6 +153,8 @@ class XTTSv2Adapter(TTSAdapter):
                 speaker_embedding=speaker_embedding,
                 temperature=self.temperature,
                 speed=self.speed,
+                top_p=self.top_p,
+                repetition_penalty=self.repetition_penalty,
                 enable_text_splitting=False,
             )
             self._is_warm = True
@@ -151,13 +167,14 @@ class XTTSv2Adapter(TTSAdapter):
         if self.model is None:
             raise RuntimeError("Model must be initialized before preparing voice profiles.")
 
-        ref_path = Path(profile.reference_audio_path)
-        if not ref_path.exists():
+        ref_paths = [Path(p) for p in profile.all_reference_paths]
+        valid_paths = [p for p in ref_paths if p.exists()]
+        if not valid_paths:
             raise RuntimeError(
-                f"Voice reference audio '{ref_path}' not found for profile '{profile.display_name}'."
+                f"Voice reference audio not found for profile '{profile.display_name}'."
             )
 
-        audio_hash = VoiceProfileManager.compute_audio_hash(str(ref_path))
+        audio_hash = VoiceProfileManager.compute_audio_hash([str(p) for p in valid_paths])
         cache_key = f"{profile.id}_{audio_hash}"
 
         if cache_key in self._latents_cache:
@@ -176,10 +193,13 @@ class XTTSv2Adapter(TTSAdapter):
             except Exception as e:
                 logger.warning(f"Could not load cache file: {e}")
 
-        logger.info(f"Computing speaker conditioning latents for profile '{profile.display_name}' from {ref_path}...")
+        logger.info(
+            f"Computing speaker conditioning latents for profile '{profile.display_name}' "
+            f"from {len(valid_paths)} audio file(s)..."
+        )
         with _scoped_xtts_audio_loader():
             gpt_cond_latent, speaker_embedding = self.model.get_conditioning_latents(
-                audio_path=[str(ref_path.resolve())],
+                audio_path=[str(p.resolve()) for p in valid_paths],
                 gpt_cond_len=30,
                 max_ref_length=60,
                 sound_norm_refs=False,
@@ -205,8 +225,8 @@ class XTTSv2Adapter(TTSAdapter):
         if self.model is None or not text.strip():
             return
 
-        ref_path = Path(profile.reference_audio_path)
-        audio_hash = VoiceProfileManager.compute_audio_hash(str(ref_path))
+        valid_paths = [Path(p) for p in profile.all_reference_paths if Path(p).exists()]
+        audio_hash = VoiceProfileManager.compute_audio_hash([str(p) for p in valid_paths])
         cache_key = f"{profile.id}_{audio_hash}"
 
         if cache_key not in self._latents_cache:
@@ -227,9 +247,16 @@ class XTTSv2Adapter(TTSAdapter):
                 speaker_embedding=speaker_embedding,
                 temperature=self.temperature,
                 speed=self.speed,
+                top_p=self.top_p,
+                repetition_penalty=self.repetition_penalty,
                 enable_text_splitting=False,
             )
             pcm_data = np.asarray(out["wav"], dtype=np.float32)
+            if self.peak_normalization and pcm_data.size > 0:
+                max_val = float(np.max(np.abs(pcm_data)))
+                if max_val > 1e-6:
+                    target_peak = 0.89125  # -1.0 dBFS
+                    pcm_data = pcm_data * (target_peak / max_val)
             yield pcm_data
         except Exception as e:
             logger.error(f"XTTS synthesis error: {e}")

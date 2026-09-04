@@ -42,6 +42,8 @@ class StreamingConfig(BaseModel):
     commit_min_words: int = 3
     commit_max_wait_ms: int = 1800
     stable_prefix_min_count: int = 2
+    enable_adaptive_sov: bool = True
+    sov_min_silence_ms: int = 200
     max_partial_queue_size: int = 2
     max_committed_queue_size: int = 8
     max_tts_queue_size: int = 8
@@ -81,8 +83,11 @@ class TTSConfig(BaseModel):
     device: str = "cuda"
     voice_profile_id: str = "onur-default"
     sample_rate: int = 24000
-    temperature: float = 0.75
+    temperature: float = 0.65
     speed: float = 1.0
+    top_p: float = 0.85
+    repetition_penalty: float = 2.0
+    peak_normalization: bool = True
 
 
 class VoiceConfig(BaseModel):

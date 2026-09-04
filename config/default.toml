@@ -31,8 +31,10 @@ whisper_max_no_speech_prob = 0.80
 whisper_min_avg_logprob = -1.20
 whisper_max_compression_ratio = 2.40
 commit_min_words = 3
-commit_max_wait_ms = 3500
+commit_max_wait_ms = 1800
 stable_prefix_min_count = 2
+enable_adaptive_sov = true
+sov_min_silence_ms = 200
 max_partial_queue_size = 2
 max_committed_queue_size = 8
 max_tts_queue_size = 8
@@ -81,8 +83,11 @@ model_path = "models/tts/xtts-v2"
 device = "cuda"
 voice_profile_id = "onur-default"
 sample_rate = 24000
-temperature = 0.75
+temperature = 0.65
 speed = 1.0
+top_p = 0.85
+repetition_penalty = 2.0
+peak_normalization = true
 
 [voice]
 profiles_root = "voices"
