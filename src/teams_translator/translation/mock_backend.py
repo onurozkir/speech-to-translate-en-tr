@@ -16,7 +16,7 @@ class MockMTAdapter(MTAdapter):
         self,
         tr_en_model_path: str = "",
         en_tr_model_path: str = "",
-        tr_fr_model_path: str = "",
+        tr_fr_model_path: Optional[str] = "",
         nllb_model_path: Optional[str] = None,
         device: str = "cpu",
         compute_type: str = "int8",

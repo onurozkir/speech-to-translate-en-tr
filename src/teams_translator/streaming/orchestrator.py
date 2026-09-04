@@ -207,18 +207,42 @@ class MeetingOrchestrator:
         mic_selector = mic_id or self.config.audio.mic_device_id
         loop_selector = loopback_id or self.config.audio.loopback_device_id
         render_selector = render_id or self.config.audio.render_device_id
-        mic_dev = (
-            self.device_manager.resolve_required(mic_selector, "mic")
-            if mic_selector else self.device_manager.find_default_mic()
-        )
-        loop_dev = (
-            self.device_manager.resolve_required(loop_selector, "loopback")
-            if loop_selector else self.device_manager.find_default_loopback()
-        )
-        ren_dev = (
-            self.device_manager.resolve_required(render_selector, "render")
-            if render_selector else self.device_manager.find_vbcable_render()
-        )
+
+        mic_dev = None
+        if mic_selector:
+            try:
+                mic_dev = self.device_manager.resolve_required(mic_selector, "mic")
+            except ValueError as exc:
+                logger.warning("Configured mic '%s' unavailable (%s). Falling back to default physical mic.", mic_selector, exc)
+                mic_dev = self.device_manager.find_default_mic()
+                if mic_dev is None:
+                    raise
+        else:
+            mic_dev = self.device_manager.find_default_mic()
+
+        loop_dev = None
+        if loop_selector:
+            try:
+                loop_dev = self.device_manager.resolve_required(loop_selector, "loopback")
+            except ValueError as exc:
+                logger.warning("Configured loopback '%s' unavailable (%s). Falling back to default loopback.", loop_selector, exc)
+                loop_dev = self.device_manager.find_default_loopback()
+                if loop_dev is None:
+                    raise
+        else:
+            loop_dev = self.device_manager.find_default_loopback()
+
+        ren_dev = None
+        if render_selector:
+            try:
+                ren_dev = self.device_manager.resolve_required(render_selector, "render")
+            except ValueError as exc:
+                logger.warning("Configured render '%s' unavailable (%s). Falling back to default VB-CABLE render.", render_selector, exc)
+                ren_dev = self.device_manager.find_vbcable_render()
+                if ren_dev is None:
+                    raise
+        else:
+            ren_dev = self.device_manager.find_vbcable_render()
         speaker_dev = self.device_manager.find_render_for_loopback(loop_dev)
         cable_capture = self.device_manager.find_vbcable_capture()
         self.resolved_devices = {
