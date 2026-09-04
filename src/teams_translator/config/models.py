@@ -63,12 +63,16 @@ class ASRConfig(BaseModel):
 
 class TranslationConfig(BaseModel):
     backend: str = "ctranslate2"
+    model_type: str = "auto"  # "opus", "nllb", or "auto"
     tr_en_model_path: str = "models/mt/opus-mt-tc-big-tr-en"
     en_tr_model_path: str = "models/mt/opus-mt-tc-big-en-tr"
     tr_fr_model_path: str = "models/mt/opus-mt-tr-fr"
+    nllb_model_path: Optional[str] = "models/mt/nllb-200-distilled-600M"
     device: str = "cpu"
     compute_type: str = "int8"
     beam_size: int = 2
+    enable_context_priming: bool = True
+    glossary: dict[str, str] = Field(default_factory=dict)
 
 
 class TTSConfig(BaseModel):

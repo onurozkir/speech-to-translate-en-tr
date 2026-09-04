@@ -54,14 +54,26 @@ share_weights = true
 
 [translation]
 backend = "ctranslate2"
+model_type = "auto"
 tr_en_model_path = "models/mt/opus-mt-tc-big-tr-en"
 en_tr_model_path = "models/mt/opus-mt-tc-big-en-tr"
 tr_fr_model_path = "models/mt/opus-mt-tr-fr"
+nllb_model_path = "models/mt/nllb-200-distilled-600M"
 device = "cpu"
 compute_type = "int8"
 beam_size = 2
 # Committed translations use this value; replaceable partials stay greedy (beam 1)
 # to protect the live partial latency budget.
+enable_context_priming = true
+
+[translation.glossary]
+"pull request" = "pull request"
+"standup" = "standup"
+"deploy" = "deploy"
+"pipeline" = "pipeline"
+"arka uç" = "backend"
+"ön yüz" = "frontend"
+"hata kaydı" = "issue"
 
 [tts]
 backend = "xtts_v2"

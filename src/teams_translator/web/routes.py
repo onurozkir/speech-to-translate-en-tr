@@ -42,16 +42,22 @@ def create_routes(orchestrator: MeetingOrchestrator) -> APIRouter:
 
     @router.get("/devices")
     async def get_devices():
+        orchestrator.device_manager.refresh()
         devices = orchestrator.device_manager.list_devices(wasapi_only=False)
         configured_mic = orchestrator.device_manager.find_by_identifier(orchestrator.config.audio.mic_device_id)
         configured_loopback = orchestrator.device_manager.find_by_identifier(orchestrator.config.audio.loopback_device_id)
         configured_render = orchestrator.device_manager.find_by_identifier(orchestrator.config.audio.render_device_id)
+
+        default_mic = configured_mic if (configured_mic and "physical_mic" in configured_mic.roles) else orchestrator.device_manager.find_default_mic()
+        default_loop = configured_loopback if (configured_loopback and configured_loopback.is_loopback) else orchestrator.device_manager.find_default_loopback()
+        default_render = configured_render if (configured_render and configured_render.is_output) else orchestrator.device_manager.find_vbcable_render()
+
         return {
             "devices": [d.to_dict() for d in devices],
             "defaults": {
-                "mic": getattr(configured_mic or orchestrator.device_manager.find_default_mic(), "stable_id", None),
-                "loopback": getattr(configured_loopback or orchestrator.device_manager.find_default_loopback(), "stable_id", None),
-                "render": getattr(configured_render or orchestrator.device_manager.find_vbcable_render(), "stable_id", None),
+                "mic": getattr(default_mic, "stable_id", None),
+                "loopback": getattr(default_loop, "stable_id", None),
+                "render": getattr(default_render, "stable_id", None),
                 "vb_capture": getattr(orchestrator.device_manager.find_vbcable_capture(), "stable_id", None),
             }
         }

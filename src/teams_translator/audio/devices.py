@@ -105,7 +105,18 @@ class AudioDeviceManager:
             self._pa = pyaudio.PyAudio()
         return self._pa
 
-    def list_devices(self, wasapi_only: bool = True) -> List[DeviceInfo]:
+    def refresh(self):
+        """Terminate and reset cached PyAudio instance so new USB devices are enumerated."""
+        if getattr(self, "_pa", None) is not None:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+            self._pa = None
+
+    def list_devices(self, wasapi_only: bool = True, refresh: bool = False) -> List[DeviceInfo]:
+        if refresh:
+            self.refresh()
         if pyaudio is None:
             logger.warning("PyAudioWPatch or PyAudio is not installed.")
             return []
@@ -216,6 +227,14 @@ class AudioDeviceManager:
     def find_by_identifier(self, identifier: str) -> Optional[DeviceInfo]:
         if not identifier:
             return None
+        res = self._find_by_identifier_internal(identifier)
+        if res is not None:
+            return res
+        # Re-enumerate audio endpoints in case device was plugged in after startup
+        self.refresh()
+        return self._find_by_identifier_internal(identifier)
+
+    def _find_by_identifier_internal(self, identifier: str) -> Optional[DeviceInfo]:
         # Explicit selectors may use a measured native Windows fallback (for example
         # DirectSound mic) when the WASAPI analogue is present but unusably quiet.
         devices = self.list_devices(wasapi_only=False)
@@ -255,6 +274,6 @@ class AudioDeviceManager:
         return device
 
     def close(self):
-        if self._pa is not None:
+        if getattr(self, "_pa", None) is not None:
             self._pa.terminate()
             self._pa = None

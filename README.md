@@ -84,19 +84,96 @@ pip install -e .
 ```
 
 ### 3. Download Model Weights
-All models are downloaded once and cached offline in `models/`:
+Models are downloaded once and cached offline in `models/`.
+
+> [!WARNING]
+> **Do not blindly run `python scripts/download_models.py all`** unless you need every single supported language and model checkpoint. Running `all` downloads over 12+ GB of weights across Whisper, all OPUS-MT checkpoints, NLLB-200 multilingual models, and XTTS-v2.
+>
+> Instead, download only the models required for your active setup.
+
+**Recommended Minimal Setup (Turkish ↔ English + Voice Cloning):**
 ```powershell
-# Download all required models (Whisper, MT English & French, XTTS-v2)
-python scripts/download_models.py all
+# 1. Speech Recognition (Whisper Large v3 Turbo)
+python scripts/download_models.py whisper
+
+# 2. Real-Time Translation (OPUS-MT with automatic INT8 quantization)
+python scripts/download_models.py mt-tr-en --convert-ct2
+python scripts/download_models.py mt-en-tr --convert-ct2
+
+# 3. Voice Cloning (XTTS-v2)
+python scripts/download_models.py xtts
 ```
-*Or download individual models as needed:*
+
+**Optional Additional Models:**
 ```powershell
-python scripts/download_models.py whisper    # Whisper Large v3 Turbo
-python scripts/download_models.py mt-tr-en   # Turkish -> English translation
-python scripts/download_models.py mt-en-tr   # English -> Turkish translation
-python scripts/download_models.py mt-tr-fr   # Turkish -> French translation
-python scripts/download_models.py xtts       # Coqui XTTS-v2 voice cloning
+# Optional: Turkish -> French translation
+python scripts/download_models.py mt-tr-fr --convert-ct2
+
+# Optional: Higher-quality multilingual model (Meta NLLB-200 Distilled 600M)
+python scripts/download_models.py mt-nllb-200 --convert-ct2
 ```
+
+---
+
+## Translation Engine: OPUS-MT vs. NLLB-200
+
+The translator supports two machine translation backends running on CPU via **CTranslate2 INT8** quantization:
+
+### 1. OPUS-MT TC-Big (Default & Recommended)
+- **Why choose OPUS-MT?**
+  - **Ultra-Low Latency**: Measured **P50: ~88 ms** (CTranslate2 INT8). Fits comfortably within the strict live meeting real-time budget.
+  - **Minimal Memory Footprint**: Only **~238 MB** per language pair.
+  - **Low CPU Overhead**: Leaves maximum CPU/GPU headroom for Whisper ASR and XTTS-v2 voice synthesis.
+  - **Bilingual Focus**: Dedicated bilateral models specifically trained on English ↔ Turkish conversational datasets.
+
+### 2. Meta NLLB-200 Distilled 600M (Alternative High-Quality Model)
+- **Why choose NLLB-200?**
+  - **Broad Vocabulary & Idioms**: Meta's state-of-the-art multilingual model excels with complex sentence structures, technical slang, and nuanced idioms.
+  - **Universal Multilingual Support**: Single 600M parameter model supports 200+ languages (FLORES-200 tags: `tur_Latn`, `eng_Latn`, `fra_Latn`, etc.).
+  - **Costs & Trade-offs**:
+    - **Higher Latency**: Measured **P50: ~310 ms** in INT8 (~3.5x slower than OPUS-MT, or ~680 ms in unquantized PyTorch float32).
+    - **Larger Memory Footprint**: ~600 MB in INT8 (~2.46 GB in float32).
+
+### Performance & Resource Cost Comparison
+
+| Model | Format / Runtime | Measured P50 Latency | Disk / Memory | Best Use Case |
+|---|---|---|---|---|
+| **OPUS-MT TC-Big** *(Default)* | CTranslate2 INT8 | **~88 ms** | **~238 MB** | **Live meetings**, low latency, lower-spec PCs |
+| **OPUS-MT TC-Big** | HuggingFace Float32 | ~188 ms | ~470 MB | Fallback mode |
+| **NLLB-200 Distilled 600M** | CTranslate2 INT8 | **~310 ms** | **~600 MB** | Complex idioms, literary prose, multilingual |
+| **NLLB-200 Distilled 600M** | HuggingFace Float32 | ~680 ms | ~2.46 GB | High-spec machines requiring maximal fidelity |
+
+### How to Configure the Active Model
+
+Edit `config/default.toml` (or create an override in `config/local.toml`):
+
+```toml
+[translation]
+# Options:
+#   "auto" : Automatically selects the low-latency OPUS-MT INT8 model (default)
+#   "opus" : Explicitly enforce OPUS-MT
+#   "nllb" : Enforce Meta NLLB-200 Distilled 600M
+model_type = "auto"   # change to "nllb" to activate NLLB-200
+```
+
+To manually convert any downloaded HuggingFace model checkpoint to CTranslate2 INT8:
+```powershell
+python scripts/convert_models_ct2.py --model models/mt/nllb-200-distilled-600M
+```
+
+### Domain Glossary & Context Priming
+
+- **Domain Glossary (`[translation.glossary]`)**: Protects technical, enterprise, or project-specific terminology from being mistranslated:
+  ```toml
+  [translation.glossary]
+  "pull request" = "pull request"
+  "standup" = "standup"
+  "deploy" = "deploy"
+  "pipeline" = "pipeline"
+  "arka uç" = "backend"
+  "ön yüz" = "frontend"
+  ```
+- **Discourse Context Priming (`enable_context_priming = true`)**: Feeds the previous committed sentence as discourse context to the decoder, resolving Turkish pro-drop ambiguities (e.g. distinguishing *"I made"* vs *"they made"*).
 
 ---
 

@@ -18,6 +18,7 @@ class MTAdapter(abc.ABC):
         tr_en_model_path: str,
         en_tr_model_path: str,
         tr_fr_model_path: Optional[str] = None,
+        nllb_model_path: Optional[str] = None,
         device: str = "cpu",
         compute_type: str = "int8",
     ):
@@ -36,6 +37,8 @@ class MTAdapter(abc.ABC):
         source_lang: str,
         target_lang: str,
         is_partial: bool = False,
+        context: Optional[str] = None,
+        glossary: Optional[dict[str, str]] = None,
     ) -> str:
         """Translate text string from source_lang to target_lang."""
         pass
@@ -44,6 +47,8 @@ class MTAdapter(abc.ABC):
         self,
         event: UtteranceEvent,
         target_lang: str,
+        context: Optional[str] = None,
+        glossary: Optional[dict[str, str]] = None,
     ) -> TranslationEvent:
         """Helper to translate an UtteranceEvent directly into a TranslationEvent."""
         translated = self.translate(
@@ -51,6 +56,8 @@ class MTAdapter(abc.ABC):
             source_lang=event.source_language,
             target_lang=target_lang,
             is_partial=not event.is_final,
+            context=context,
+            glossary=glossary,
         )
         return TranslationEvent(
             meeting_id=event.meeting_id,

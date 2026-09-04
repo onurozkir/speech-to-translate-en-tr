@@ -31,6 +31,12 @@ MODELS = {
         "license": "CC-BY-4.0",
         "purpose": "Outgoing TR->FR Translation",
     },
+    "mt-nllb-200": {
+        "repo_id": "facebook/nllb-200-distilled-600M",
+        "destination": "models/mt/nllb-200-distilled-600M",
+        "license": "CC-BY-NC-4.0",
+        "purpose": "High-Quality Multilingual MT Benchmark (TR <-> EN & FR)",
+    },
     "xtts": {
         "repo_id": "coqui/XTTS-v2",
         "destination": "models/tts/xtts-v2",
@@ -72,6 +78,11 @@ def main():
         choices=list(MODELS.keys()) + ["all"],
         help="Model to download (or 'all')",
     )
+    parser.add_argument(
+        "--convert-ct2",
+        action="store_true",
+        help="Automatically convert downloaded MT models to CTranslate2 INT8 format",
+    )
     args = parser.parse_args()
 
     if args.model == "all":
@@ -79,6 +90,15 @@ def main():
             download_model(k, v)
     else:
         download_model(args.model, MODELS[args.model])
+
+    if args.convert_ct2:
+        print("\n--- Converting MT models to CTranslate2 INT8 ---")
+        from convert_models_ct2 import convert_model
+        mt_root = Path("models/mt")
+        if mt_root.exists():
+            for d in sorted(mt_root.iterdir()):
+                if d.is_dir() and not d.name.endswith("-ct2"):
+                    convert_model(d, quantization="int8")
 
 
 if __name__ == "__main__":
