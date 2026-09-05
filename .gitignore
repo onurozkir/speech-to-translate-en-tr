@@ -32,7 +32,6 @@ config/local.toml
 # Internal Planning & Docs
 Plan.md
 GEMINI.md
-AGENTS.md
 mcp_servers.json
 .kilocodingrules
 .kilo/

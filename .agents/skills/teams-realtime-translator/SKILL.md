@@ -80,6 +80,9 @@ Apply this workflow whenever the skill matches:
     Always ensure `</s>` EOS token is present before CTranslate2 batch translation,
     decode with `skip_special_tokens=True`, and apply domain glossary replacements
     with word-boundary awareness.
+37. Always consult `FILE_MAP.md` before searching, reading, or editing files.
+    Identify the responsible subsystem and inspect only the 1–2 targeted source
+    files and their paired unit tests. Never run broad recursive repository searches.
 
 Before editing, inspect the current implementation and dirty worktree. During
 review, reject growing backlog, committed reordering/loss, false Ready states,
